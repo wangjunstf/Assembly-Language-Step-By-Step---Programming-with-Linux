@@ -1,0 +1,1065 @@
+# 第 12 章 C 语言 调用 C 语言编写的外部函数
+
+几乎所有针对 Linux 的，不涉及诸如 Perl 或 Python 之类的解释语言的编程示例都是 C 编写的。**最重要的是，C 运行时库包含了很多非常有用的函数，但是在调用这些函数时我们需要学习 C 协议。**
+
+
+
+## 12.1 什么是 GNU
+
+早在 70 年代末期，一个名叫理查德 托斯曼的狂妄的 Unix 黑客希望拥有自己的 Unix 副本，后来，他编写了自己的版本。理查德 托斯曼将他的 Unix 版本命名为 Unix 。他创立了自由软件基金会作为 GNU 工具开发的大本营，还有一个激进的软件许可协议，名为 GNU 公共许可(GPL)，有时被非正式地称为“开放版权”。托斯曼在 GPL 下发布了 GNU 工具，这不仅需要该软件是免费的(包括所有的源代码)，而且阻止人们对该软件作了轻微的修改便将其衍生作品称为自己所有。修改和改进都必须归还给 GUN 社区。
+
+在这种潮流中，Linux 诞生了，Linux 采用 GNU 工具集构建和维护。
+
+
+
+### 12.1.1 “瑞士军刀” 编译器
+
+托斯曼的“遗产”主要包含在 GNU 编译器系列。这类“遗产”很多，但现在必须竭尽全力去了解的应该是 GNU 的 C 编译器: gcc。(Unix 世界有点盲目崇拜小写字母)
+
+在使用汇编语言工作时为什么要用到 C 编译器呢？主要是这样：gcc 所做的事情不仅限于简单地编译 C 代码。它是瑞士军刀式的开放工具。事实上，将它所做的事情描述为生成软件而不仅仅是编译软件，会更为恰当些。除了将 C 代码编译为目标代码之外，gcc 既管理编译步骤，又管理连接步骤。
+
+gcc 使用 gas 来编译生成的汇编代码，使用 GNU ld 来连接代码。
+
+
+
+### 12.1.2 以 GNU 的方式生成代码
+
+gcc 在做的所有的工作，但实际上 gcc 真正做的事情是作为几种 GNU 工具的主控制器，监督除了你特别想看的之外的，根本不需观察的代码装配线。
+
+<img src="/Users/wangjun/Library/Application Support/typora-user-images/截屏2021-06-30 上午11.15.44.png" alt="截屏2021-06-30 上午11.15.44" style="zoom:67%;" />
+
+
+
+程序员通常在终端窗口中通过 shell 命令行调用 gcc。gcc 接管了系统控制之后，立即调用了一个名为 c 预处理器的实用工具：cpp。预处理器获得了最初的 c 源代码文件，并处理某些诸如 #include 和 #define 之类的项。
+
+每当 cpp 完成它的工作后，gcc 会认真地接管过来。gcc 从预处理 c 源代码文件生成一个 .s 为扩展名的汇编语言源代码文件。以人类可读的形式来看，它几乎是与原来的 .c 文件中的 C 语句相等的汇编代码。
+
+当 gcc 已经完全生成了与 C 源代码文件相等的汇编语言文件后，它调用 GNU 汇编编译器，gas，将 .s 文件编译为目标代码文件。然后这个目标代码文件被写入到一个 .o 为扩展名的文件中。
+
+最后一步涉及连接器: ld。.o 文件包含二进制代码，这只是从最初的 .c 文件生成的二进制代码。该 .o 文件不包含来自在 C 编程中非常重要的标准 C 函数库代码。这些库已经被编译好，只有在需要时才连接到应用程序中。连接器 ld 在 gcc 的指导下完成这项工作。好的部分：gcc 能够清楚地知道应用程序需要连接到哪些标准的 C 函数库才能工作，并且它始终包括正确版本中的正确的库。虽然 gcc 并没有做实际的连接工作，但是它知道需要连接什么——随着程序变得越来越复杂，这一点确实很有价值。
+
+在行的结尾，ld 给出了充分连接的，可执行的程序文件。此刻，生成工作已经完成，gcc 将控制返回给 Linux shell。
+
+
+
+### 12.1.3 如果在汇编工作中使用 gcc
+
+我们需要的是 gcc 在连接方面的专长，因而首先使用 NASM 生成一个包含二进制目标代码的 .o 文件：
+
+```asm
+nasm -f elf -g -F DWARF hello.asm
+```
+
+我们调用 gcc 来连接程序。
+
+```
+gcc -m32 hello.o -o hello 
+```
+
+该命令显示的唯一输入文件是一个名为 .o 的包含目标代码的文件，告诉 gcc 所有需要做的事情就是将该文件与 C 运行时库连接，产生最后的可执行程序。-o hello 部分告诉 gcc，最终的可执行文件的名称为 "hello"
+
+
+
+### 12.1.4 为什么不用 gas
+
+GNU 汇编编译器 gas 使用一种特殊的语法，它与所有在 X86 世界里使用的其他我们熟悉的汇编编译器完全不同，这就是 AT&T 的语法，创建一种可移植式汇编表示法，目的是使 Unix 系统能够更加容易地由一种底层 CPU 移植到另外一种上。
+
+
+
+## 12.2 连接到标准的 C 库函数
+
+<img src="https://raw.githubusercontent.com/wangjunstf/pics/main/uPic/%E6%88%AA%E5%B1%8F2021-07-03%20%E4%B8%8A%E5%8D%889.43.06.png" alt="截屏2021-07-03 上午9.43.06" style="zoom:67%;" />
+
+
+
+启动代码像调用过程一样(通过 CALL 指令)调用你的程序，而你的程序则通过 RET 指令将控制返回给 C 代码库。从技术上讲，程序是一个过程。当汇编语言程序通过 RET 指令将控制返回给吊椅哦那个它的程序时，关闭代码开始执行，实际上，正是关闭代码通过必要的 INT 80H 内核调用，将控制权返回给 Linux。
+
+在此期间，想做多少对 glibc 的调用都可以。当使用 gcc 连接你的程序时，你所调用的包含 C 库例程的代码被连接到程序中。一定要注意，启动，关闭代码以及所有用于库调用的代码实际上存在于 gcc 生成的可执行文件中。
+
+
+
+### 12.2.1 C 调用公约
+
+glibc 并不是唯独挑出汇编语言程序来特殊对待的。纯粹的 C 程序也以相同的方式工作，这就是为什么 C 程序的主程序部分被称为主函数饿原因。它的确是一个函数，标准的 C 库代码调用通过一条 CALL 指令来调用它，然后它执行 RET 指令将控制返回给标准 C 代码库。
+
+* 过程(这是 C 调用函数的更为通用的术语)必须保存 EBX，ESP，EBP，ESI和EDI这些32位寄存器，这些寄存器必须与调用之前相同。
+* 如果返回值是 32 位或者更小位数，这些值将被返回到 EAX 中。如果是 64 位整数值，则返回到 EDX 和 EAX 中，其中低 32 位放到 EDX 中，高 32 位放在 EAX 中。如果是浮点型返回值，则返回到浮点堆栈的顶部。如果是字符串，结构或者其他位数大于 32 位的数据项，则通过引用返回，即该过程返回一个指向它们的 32 位指针到 EAX 中。
+* 传递给程序的参数被以相反的顺序压入堆栈中。例如，给定 MyFunc(foo, bar, bas)，则 bas 被第一个压入堆栈，bar 第二个压入堆栈，foo 第三个压入堆栈。
+* 过程本身并不从堆栈中移除参数。主调程序必须在过程返回之后做这件事情。最常见的方法是向堆栈指针寄存器 ESP 上添加一个偏移地址。
+* 命名汇编程序的起始点的标签必须是"main:"，而不是 "start:"，而且"main:"必须被声明为全局的。
+
+
+
+### 12.2.2 建立一个框架
+
+对于每一个连接到 glibc(或连接到几乎任何其他用 c 编写的函数库)的程序而言，其开始处和结束处的代码完全一样。
+
+```asm
+;  Source name     : BOILER.ASM
+;  Executable name : BOILER -- though this isn't intended to be run!
+;  Version         : 2.0
+;  Created date    : 10/1/1999
+;  Last update     : 5/26/2009
+;  Author          : Jeff Duntemann
+;  Description     : A "skeleton" program in assembly for Linux, using NASM 2.05,
+;	demonstrating the necessary code to preserve and restore EBP, EBX, ESI,
+;	and EDI. The program does nothing and is provided as boilerplate for
+;	assembly projects that link to functions written in C.
+;
+;  Build using these commands:
+;    nasm -f elf -g -F stabs boiler.asm
+;    gcc boiler.o -o boiler
+
+
+[SECTION .data]			; Section containing initialised data
+	
+[SECTION .bss]			; Section containing uninitialized data
+
+
+[SECTION .text]			; Section containing code
+					
+global main			; Required so linker can find entry point
+extern puts
+	
+main:
+  push ebp		; Set up stack frame for debugger
+	mov ebp,esp
+	push ebx		; Program must preserve ebp, ebx, esi, & edi
+	push esi
+	push edi
+	;;; Everything before this is boilerplate; use it for all ordinary apps!	
+
+
+	;;; Everything after this is boilerplate; use it for all ordinary apps!
+	pop edi			; Restore saved registers
+	pop esi
+	pop ebx
+	mov esp,ebp		; Destroy stack frame before returning
+	pop ebp
+	ret			; Return control to Linux
+
+```
+
+
+
+### 12.2.3 保存和恢复寄存器
+
+连接到 C 函数的 Linux 应用程序不能更改的寄存器由 EBX，ESP，EBP，ESI和EDI。当程序开始时，boiler.asm 将这些寄存器保存到堆栈中，然后在将控制返回到 Linux 之前再回复他们。
+
+而其他寄存器，就有可能被修改。即当调用其他人编写的过程时，那些过程可能会改变 EAX, ECX和 EDX 中的值。
+
+
+
+### 12.2.4 建立堆栈帧
+
+在 Linux 上承担汇编语言编译工作的编译机制是堆栈帧机制。编译器依赖堆栈帧来常见函数的局部变量，虽然堆栈帧在纯粹的汇编工作中的用处很小，但是如果想调用某种高级语言编译器编写的函数，就必须了解。
+
+堆栈帧是堆栈上一个属于某一特定函数的位置，它基本上是指包含在两个寄存器——基址指针寄存器 EBP 和堆栈指针 ESP 寄存器之间的位置。如下图所示：
+
+<img src="https://raw.githubusercontent.com/wangjunstf/pics/main/uPic/%E6%88%AA%E5%B1%8F2021-07-03%20%E4%B8%8A%E5%8D%8810.25.18.png" alt="截屏2021-07-03 上午10.25.18" style="zoom: 50%;" />
+
+
+
+堆栈帧是通过将主调程序的 EBP 寄存器的副本压入堆栈以将其保存，然后将主调程序的堆栈指针寄存器 EBP 拷贝到寄存器 EBP 来创建的。任何履行了 C 调用公约的汇编程序的前两条指令都必须是这些：
+
+```asm
+push ebp
+mov ebp,esp
+```
+
+在此之后应该不去干预 EBP，或者在紧要时刻必须使用它， 在任何违背 C 库假设的改变之前，必须确保能够恢复它。(强烈建议不干预它)。EBP 被认为是新堆栈帧的锚。在堆栈帧之上(即在更高的地址)将会存储一些往往需要在代码中引用的内容，EBP 是引用它们的唯一安全方法。
+
+一个不太明显的事实，EBP 也是一个能够藏匿主调程序的堆栈指针值(ESP)的“小洞”。这也是你一旦建立了堆栈帧就不能改变 EBP 值的另外一个理由。
+
+一旦 ESP 被作为堆栈帧的一端而安全地锚定后，堆栈指针寄存器 ESP 就可以根据需要自由地上下移动了。但是，需要做的第一件事是将主调程序的 EBX，ESI 和 EDI 的值放入堆栈。当堆栈帧在程序结尾被销毁时，他们被从堆栈中弹回到主调程序(在上面的例子中，它是来自标准 C 库的启动/关闭代码)，他们的值与当启动代码将你的程序作为 main 函数调用时的值相同。
+
+一旦 EBX，ESI和EDI 已经就位，你就可以把任何需要暂存的内容压入和弹出堆栈了。
+
+
+
+### 12.2.5 销毁堆栈帧
+
+在过程结束之前，它们的堆栈帧必须被销毁。所有留在堆栈中的值应该是主调程序的 EBP，EBX，ESI和EDI的值。从根本上来讲，如果 EDI 是我们必须保存到堆栈上的最后一个值，那么 ESI(堆栈指针寄存器)的值最好指向那个保存的 EDI值，否则会有麻烦。
+
+一旦清理干净堆栈，为了销毁堆栈帧，我们必须首先将主调程序的寄存器值弹回到相应的寄存器中，一定要确保这些弹出操作采用正确的顺序。最后将主调程序的 EBP 值弹出堆栈
+
+```
+mov esp,ebp
+pop ebp
+```
+
+就这样，堆栈帧消失了，堆栈和神圣的寄存器现在和启动代码将控制权交给我们的程序时处于同一状态。现在可以安全地执行将控制权发送给 C 库关闭代码的 RET 指令了。
+
+
+
+### 12.2.6 通过 puts() 输出字符
+
+glibc 中最简单的有用函数是 puts()，它能够向标准输出发送字符。而汇编语言中调用 puts() 非常简单，仅需 3 行代码即可实现。
+
+```
+;  Source name     : BOILER.ASM
+;  Executable name : BOILER -- though this isn't intended to be run!
+;  Version         : 2.0
+;  Created date    : 10/1/1999
+;  Last update     : 5/26/2009
+;  Author          : Jeff Duntemann
+;  Description     : A "skeleton" program in assembly for Linux, using NASM 2.05,
+;	demonstrating the necessary code to preserve and restore EBP, EBX, ESI,
+;	and EDI. The program does nothing and is provided as boilerplate for
+;	assembly projects that link to functions written in C.
+;
+;  Build using these commands:
+;    nasm -f elf -g -F stabs boiler.asm
+;    gcc boiler.o -o boiler
+
+
+[SECTION .data]			; Section containing initialised data
+HelloWorld: db "hello world",0
+	
+[SECTION .bss]			; Section containing uninitialized data
+
+
+[SECTION .text]			; Section containing code
+					
+global main			; Required so linker can find entry point
+extern puts
+	
+main:
+    push ebp		; Set up stack frame for debugger
+	mov ebp,esp
+	push ebx		; Program must preserve ebp, ebx, esi, & edi
+	push esi
+	push edi
+	;;; Everything before this is boilerplate; use it for all ordinary apps!	
+    push HelloWorld
+    call puts
+    add esp,4
+
+
+
+	
+	;;; Everything after this is boilerplate; use it for all ordinary apps!
+	pop edi			; Restore saved registers
+	pop esi
+	pop ebx
+	mov esp,ebp		; Destroy stack frame before returning
+	pop ebpffrr
+	ret			; Return control to Linux
+```
+
+
+
+## 12.3 使用 printf() 格式化文本输出
+
+puts 只能发送一个简单的文本字符串到一个文件(默认情况下，标准输出)，更糟糕的是，puts()始终在它的显示的内容的结尾包含一个 EOL 字符，无论在字符串数据中是否包含更多字符。
+
+几乎所有的字符串输出需求，我们最好使用一个功能更为强大的库函数——printf()。printf()函数使我们仅仅使用一个函数调用就能完成很多真正有用的事情:
+
+* 输出带有终止字符 EOL 的文本或者不带终止字符 EOL 的文本。
+* 在输出数值型数据时，通过指定格式化代码，可将其转换成各种数字格式的文本。
+* 输出文件到一个包含多个分别存储的字符串文件。
+
+例如，以下格式化字符串：
+
+"I am %d years old."
+
+%d 告诉 printf() 有一个符号整数值需要被转换为文本，并且用该文本替换基字符串中相应的格式化文本。如果传递的是 12，那么字符串将是：
+
+"I am 12 years old."
+
+| 格式化代码 | 基字符串 | 描述                               |
+| ---------- | -------- | ---------------------------------- |
+| %c         | n/a      | 输出单个字符                       |
+| %s         | n/a      | 输出字符串                         |
+| %x         | 16       | 转换一个整数，并将其以十六进制显示 |
+| %%         | n/a      | 显示一个百分号符号                 |
+| %d         | 10       | 转换一个整数，并将其以十进制显示   |
+
+我们还可以在 '%'和代码字母之间放一个整数值：`%5d`此代码告诉 printf()，右对齐显示一个 5 个字符宽的值。如过这个值没有包含宽度值，那么 printf() 将按它的实际宽度来显示它。
+
+
+
+### 向printf 传递参数
+
+printf() 函数调用方法如下：
+
+`printf("I am %d years old",23);` 该函数的参数有两个，分别为23,"I am %d years old"。将参数从右到左依次压入堆栈中
+
+```
+push 23
+push Msg
+call printf
+add esp,8
+```
+
+
+
+需要记住以下三个关键方面：
+
+* 参数被由右至左压入堆栈。
+* 调用 printf() 之后，必须将 ESP 与压入的所有参数的字节总数相加。
+* printf(()能够破坏除了神圣寄存器之外的一切内容。 
+* 小心地使用每一个神圣寄存器(ESI，EDI或者 EBX 寄存器)，显然，不要尝试使用 ESP或EBP
+
+我们应该小心地确保所有字符串参数都正确地以一个二进制 0 终止，这是唯一一种告诉 puts() 和 printf() 之类的 glibc 函数知道字符串从哪里结束。
+
+
+
+## 12.4 使用 fgets() 和 scanf() 进行数据输入
+
+gets() 可以输入字符串，但它是危险的函数，因为它不能控制输入的字符，当输入的字符大于缓冲区的大小时，将会导致缓冲区溢出。fgets() 的好处是可以指定接收字符的个数。
+
+下面是 fgets() 函数的使用方法：
+
+1. 在程序段的顶部声明 extern fgets 和 extern stdin。
+2. 在程序的 .bss 段通过使用 RESB 指令在程序的 .bss 段声明一个足够大的缓冲区为变量，以确保你想让用户输入的字符串数据。
+3. 为了调用 fgets ，首先将文件句柄压入堆栈，必须压入句柄本省，而不是句柄的地址，因此使用这种格式：`push dword [stdin]`
+4. 把用于指明想要 fgets() 接收的最大字符数的值压入堆栈。一定要确保它不比你在 .bss 段中定义的缓冲区变量大。
+5. 把 fgets() 即将用于存储用户输入字符的缓冲区变量的地址压入堆栈。
+6. 调用 fgets 本省。
+7. 清理堆栈
+
+```
+push dword [stdin]          ; 将标准输入的文件句柄压入堆栈
+push 100                    ; 从键盘接收不多于 100 个字符
+push MyStr                  ; 用于存放字符的缓冲区的地址
+call fgets                  ; 调用 fgets
+add esp,12                  ; 清理堆栈
+push MyStr                  ; 将打算输出的字符串地址压入堆栈
+push testStr                ; 将格式化字符串压入堆栈
+call printf                 ; 调用 printf
+add esp,8                   ; 清理堆栈
+```
+
+
+
+### 使用 scanf() 输入数字值
+
+scanf() 函数从键盘上接收字符数据流，并将其转换为数字数据，存储在数字型变量中。一个典型的 scanf() 调用代码是这样的:
+
+```asm
+push IntVal       ; 将整形缓冲区的地址压入堆栈
+push Iformat      ; 将整形格式化字符串的地址压入堆栈
+call scanf        ; 调用 scanf 来输入数字数据
+add esp,8         ; 清理堆栈
+```
+
+注意：如果用户输入代表一个数字值的 ASCII 太大，以至于无法包含在一个 32 位整数中，或者输入了某些不能代表一个数字值的字符混合物，scanf() 函数将返回给程序的值将是一个垃圾值。
+
+
+
+## 12.5 驾驭时间
+
+标准 C 库包含了一组数量众多的能够操作如期和时间的函数。
+
+
+
+### 12.5.1 C 库的时间机制
+
+在标准 C 库内部深处的某个地方，有一个代码块，当被调用时，该代码块能够查看计算机的实时时钟，读取当前的日期和时间，并将其转换为一个标准的 32 位无符号整数值。这个值(理论上来讲)是已经在(始于 1970年 1 月 1 日 00:00:00 通用时间的)"Unix 时代"度过的秒数。每度过一秒，该值就会加 1。当通过 C 库读取当前时间或日期，我们检索的是这个数字的当前值。
+
+这个数字叫做 time_t。time_t 值于世界标准时间(UTC)2001 年 9 月 9 日上午 07 时 46分 40秒翻转到了 10 位(自1970年 1 月 1 日 00:00:00 以来的 10亿秒 ) 。在不久的将来暂时还没有千年虫式的危险，但是在 2038 年 1 月 19 日上午 03 点 14 分 07 秒，将 time_t 作为一个有符号整数处理的计算机将会看到它翻转到 0，因为一个 32 位有符号整数能够表达的最大量是 2147483647。
+
+当 32 位不足以表示当前时间时，就使用 64 位来表示。那将推迟到 292 亿年之后。
+
+另一种由标准 C 库实现的标准数据类型要更有用些: tm 结构，它是一组 9 个 32 位的数字值，分别以不同的有用块来表达当前时间和日期。在 Linux 中，它更像是一个数组，因为它们连续，且类型相同。
+
+<img src="https://raw.githubusercontent.com/wangjunstf/pics/main/uPic/%E6%88%AA%E5%B1%8F2021-07-03%20%E4%B8%8B%E5%8D%884.44.11.png" alt="截屏2021-07-03 下午4.44.11" style="zoom:67%;" />
+
+
+
+有些 C 函数能够将 time_t 值转换为 tm 值，并能再转换回来。
+
+
+
+### 12.5.2 从系统时钟中取出 time_t 值
+
+通过 time() 函数实现
+
+```asm
+push dword 0       ; 将一个 32 位空指针压入堆栈，我们不需要缓冲区
+call time          ; 将日期值返回到 eax 中
+add esp,byte 4     ; 为一个参数清理堆栈
+mov [oldtime],eax  ; 将时间值保存到内存变量中
+```
+
+如果要把 time_t 值存储到缓冲区中，需要传递指向缓冲区的指针。如果不想将 time_t 值存储到缓冲区中，必须在堆栈上给他传递一个空指针。
+
+### 12.5.3 将 time_t 值转换为一个格式化字符串
+
+使用 ctime() 将 time_t 值转换为如下字符串：该字符串指针指向一个埋藏在运行时库深处的字符串指针。
+
+Wed June 3 12:13:21 2009
+
+调用方法:
+
+```
+push OldTime     ; 将日历时间值的地址压入堆栈
+call ctime       ; 返回一个指向 ASCII 时间字符串的指针到 EAX 中 
+add esp,4        ; 为一个参数进行堆栈清理
+```
+
+注意，传递的是 time_t 的地址，而不是 time_t 值本身。为了扩展上的灵活性。
+
+
+
+### 12.5.4 生成单独的本地时间值
+
+使用 localtime()，可以将组成日期和时间的各个部分分割为单独的值，以便我们单独使用它们。
+
+```
+push OldTime      ; 将日历时间的地址压入堆栈
+call localtime    ; 返回指向静态时间结构的指针到 EAX 中
+add esp,4         ; 为 1 个参数清理堆栈
+```
+
+得到静态时间结构的指针后，通过偏移量就可以访问特定的字段。例如，下列代码获取年字段的偏移量:
+
+```
+mov edx, dword [eax+20]   ; 年份的值在 tm 中的偏移量是 20 个字节
+push edx                  ; 将该值压入堆栈
+push yrmsg                ; 将基字符串的地址压入堆栈
+call printf               ; 用 printf 显示字符串和年份值
+add esp,byte 8            ; 堆栈清理
+```
+
+
+
+### 12.5.5 通过使用 MOVSD 复制 glibc 的 tm 结构
+
+有时保存一份单独的 tm 结构的副本会很方便，尤其是当我们一次需要处理几个日期/时间值时。
+
+需要借助 REP MOVSD(Repeat Move String Double) 指令。借助该指令，将被复制的数据——放入 ESI 中，将目标位置的指针放入 EDI 中，将被移动的项的数量放入 ECX 中，然后，确保方向标志 DF 被清零，并执行 REP MOVSD
+
+```
+mov esi,eax           ; 将静态 tm 的地址从 EAX 复制到 ESI 中
+mov edi,tmcopy        ; 将本地 tm 的副本的地址放入 edi 中
+mov ecx,9             ; 在 Linux 下，一个 tm 结构的大小是 9 个双字
+cld                   ; 将 DF 清零
+rep movsd
+```
+
+上述功能，我们将 C 库的 tm 结构移到一个在程序的 .bss 段中分配的缓冲区中。分配方式如下：
+
+```
+TmCopy resd 9         ; 为时间结构 tm 保留 9 个 32 位字段
+```
+
+其他系统，time_t 值已经有了不同于 32 位整数值的其他定义。这里，glibc 将 time_t 定义为一个 32 位整数。对于其他的非 GNU 实现的 Unix，最好使用 C 库函数 difftime() 来返回两个 time_t 值之间的差值。
+
+
+
+## 12.6 理解 AT&T 指令助记符
+
+为了理解 gcc 编译器和标准 C 库，最好了解下 AT&T。
+
+
+
+### 12.6.1 AT&T 助记符公约
+
+* **AT&T 助记符和寄存器名称总是采用小写形式。**
+* 寄存器名称总是以百分比符号 % 开头。每一个具有操作数的 AT&T 机器指令都有一个表明其操作数尺寸的单字符后缀。后缀字母有 b, w和l。表明字节(8位)，字(16 位)，或更长的 (32位)。
+* **在 AT&T 语法中，源操作数和目标操作数存放的顺序刚好与英特尔语法相反。**
+* 在 AT&T语法中，立即数操作数前面总是带有一个美元符号($)。
+* 并非所有的 AT&T 指令助记符都由 gcc 产生。与 Intel 的 JCXZ , JECXZ, LOOP, LOOPZ, LOOPE, LOOPNZ 和 LOOPNE 等值的相关指令只是最近才被添加到 AT&T 助记符集合中，gcc 从来不产生需要用到它们的代码。
+* 在 AT&T 语法中，内存引用中的位移是有符号量，放在包含基址，索引和缩放比例值的括号外面。
+
+
+
+### 12.6.2 查看 gcc 常见 gas 源文件
+
+使用下列命令生成 .s 汇编文件
+
+```
+gcc dateis.c -S
+```
+
+现有一个 .c 文件 dateis.c
+
+```
+#include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+int main()
+  {
+    time_t timeval;
+    
+    (void)time(&timeval);
+    printf("The date is: %s", ctime(&timeval));
+    exit(0);
+  }
+```
+
+现在将它编译为 .s 文件 `gcc -S dateis.c`
+
+dateis.c
+
+```
+	.file	"dateis.c"
+	.text
+	.section	.rodata
+.LC0:
+	.string	"The date is: %s"
+	.text
+	.globl	main
+	.type	main, @function
+main:
+.LFB5:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset 6, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register 6
+	subq	$16, %rsp            ; sub rsp,16
+	movq	%fs:40, %rax         
+	movq	%rax, -8(%rbp)
+	xorl	%eax, %eax
+	leaq	-16(%rbp), %rax       ; lea rax, rbp-16
+	movq	%rax, %rdi
+	call	time@PLT
+	leaq	-16(%rbp), %rax
+	movq	%rax, %rdi
+	call	ctime@PLT
+	movq	%rax, %rsi
+	leaq	.LC0(%rip), %rdi
+	movl	$0, %eax           
+	call	printf@PLT
+	movl	$0, %edi
+	call	exit@PLT
+	.cfi_endproc
+.LFE5:
+	.size	main, .-main
+	.ident	"GCC: (Ubuntu 8.4.0-1ubuntu1~18.04) 8.4.0"
+	.section	.note.GNU-stack,"",@progbits
+```
+
+
+
+* 当被引用时，消息字符串的名称带有一个美元标志($)前缀，就像立即数一样。而在 NASM 中，一个已命名的字符串变量则被认为是一个变量而不是立即值
+* 在 AT&T 中，注释是 '#' 开始的一行
+
+
+
+### 12.6.3 内存引用语法
+
+在 Intel 助记符中，引用一个内存位置可以通过将该位置放在方括号内部来实现，例如：
+
+```
+mov ax,dword [ebp]
+```
+
+更为复杂的寻址如下：
+
+```
+mov eax,dword [ebx-4]         ; 基址减去位移量
+mov al, byte [bx+di+28]				; 基址加上索引加上位移量
+mov al,byte [bx+di*4]         ; 基址加上索引乘以缩放比例
+```
+
+
+
+而在 AT&T 助记符中，则很大不同
+
+```
+movb (%ebx), %al         # mov byte al,[ebx]  在 Intel 语法中
+```
+
+如果存在基址，索引，缩放比例，则将它们放到括号内，如果有一个位移的话，该位移必须放在小括号的前面，并且放在小括号的外面：
+
+```
+movl -4(%ebx),%eax       # mov dword eax, [ebx-4]  在 Intel 语法中
+movb 28(%ebx,%edi),%eax  # mov byte eax, [ebx+edi+28] 在 Intel 语法中
+```
+
+AT&T 内存引用架构如下
+
++- disp(base,index,scale)
+
+
+
+## 12.7 产生随机数
+
+研究表明，没有任何可证明的方式能够严格从软件产生真正的随机性以及随机数。从理论上，要想实现真正的随机，你的确需要从某种量子现象中获得一些触发机制(放射现象是最经常提及的)。但是，由于缺乏一个核动力随机数产生器，我们将退而求其次，选择伪随机数。
+
+
+
+标准 C 库包含两个与伪随机数相关的函数：
+
+* srand() 函数传递一个新的种子值给随机数生成器。该值必须是一个 32 位整数。如果没有传递种子值，则该值默认为 1。
+  * rand() 函数返回一个 31 位的随机数。最高位一直为 0，因此，如果作为 32 位有符号整数处理的话，该值始终为正。
+
+
+
+### 12.7.1 利用 srand() 为随机生成器“播种”
+
+```
+push 0            ; 将一个 32 位空指针压入堆栈，因为不需要将时间保存到缓冲区中
+call time         ; 返回 time_t 值(一个 32 位整数)到 eax 
+add esp,4         ; 清理堆栈
+push eax          ; 将 eax 中的时间值压入堆栈
+call srand        ; 时间值就是随机生成器的种子
+add esp,4         ; 清理堆栈
+```
+
+
+
+### 12.7.2 产生伪随机数
+
+```asm
+;  Source name     : RANDTEST.ASM
+;  Executable name : RANDTEST
+;  Version         : 2.0
+;  Created date    : 12/1/1999
+;  Last update     : 5/22/2009
+;  Author          : Jeff Duntemann
+;  Description     : A demo of Unix rand & srand using NASM 2.05
+;
+;  Build using these commands:
+;    nasm -f elf -g -F stabs randtest.asm
+;    gcc randtest.o -o randtest
+;
+
+[SECTION .data]			; Section containing initialised data
+
+Pulls	   dd 36		;  How many numbers do we pull?
+Display    db 10,'Here is an array of %d %d-bit random numbners:',10,0
+ShowArray  db '%10d %10d %10d %10d %10d %10d',10,0		
+CharTbl db '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-@'
+
+[SECTION .bss]		; Section containing uninitialized data
+
+BUFSIZE  equ 70		; # of randomly chosen chars
+RandVal  resd 1		; Reserve an integer variable
+Stash    resd 72	; Reserve an array of 72 integers for randoms
+RandChar resb BUFSIZE+5	; Buffer for storing randomly chosen characters
+
+[SECTION .text]		; Section containing code
+
+extern printf	
+extern puts
+extern rand
+extern scanf	
+extern srand
+extern time			
+		
+;------------------------------------------------------------------------------
+;  Random number generator procedures  --  Last update 5/22/2009
+;
+;  This routine provides 5 entry points, and returns 5 different "sizes" of
+;  pseudorandom numbers based on the value returned by rand. Note first of 
+;  all that rand pulls a 31-bit value. The high 16 bits are the most "random"
+;  so to return numbers in a smaller range, you fetch a 31-bit value and then
+;  right shift it zero-fill all but the number of bits you want. An 8-bit
+;  random value will range from 0-255, a 7-bit value from 0-127, and so on.
+;  Respects EBP, ESI, EDI, EBX, and ESP. Returns random value in EAX.
+;------------------------------------------------------------------------------
+pull31: mov ecx,0		; For 31 bit random, we don't shift
+	jmp pull
+pull16: mov ecx,15		; For 16 bit random, shift by 15 bits
+	jmp pull
+pull8:	mov ecx,23		; For 8 bit random, shift by 23 bits
+	jmp pull
+pull7:  mov ecx,24		; For 7 bit random, shift by 24 bits
+	jmp pull
+pull6:	mov ecx,25		; For 6 bit random, shift by 25 bits
+	jmp pull
+pull4:	mov ecx,27		; For 4 bit random, shift by 27 bits
+pull:	push ecx		; rand trashes ecx; save shift value on stack
+	call rand		; Call rand for random value; returned in EAX
+	pop ecx			; Pop stashed shift value back into ECX
+	shr eax,cl		; Shift the random value by the chosen factor
+				;  keeping in mind that part we want is in CL
+	ret			; Go home with random number in EAX
+
+;---------------------------------------------------------------------------
+;  Newline outputter  --  Last update 5/22/2009
+;
+;  This routine allows you to output a number of newlines to stdout, given
+;  by the value passed in EAX.  Legal values are 1-10. All sacred registers
+;  are respected. Passing 0 in EAX will result in no newlines being issued.
+;---------------------------------------------------------------------------
+newline:
+	mov ecx,10	; We need a skip value, which is 10 minus the
+	sub ecx,eax	;  number of newlines the caller wants.
+	add ecx,nl	; This skip value is added to the address of
+	push ecx	;  the newline buffer nl before calling printf.
+	call printf	; Display the selected number of newlines
+	add esp,4	; Stack cleanup for one parm
+	ret		; Go home
+nl	db 10,10,10,10,10,10,10,10,10,10,0
+	
+		
+	;; This subroutine displays numbers six at a time
+	;; Not intended to be general-purpose...
+shownums:	
+	mov esi, dword [Pulls]	; Put pull count into ESI
+.dorow:	mov edi,6		; Put row element counter into EDI
+.pushr:	dec edi			; Decrement row element counter
+	dec esi			; Decrement pulls counter
+	push dword [Stash+esi*4]; Push number from array onto stack
+	cmp edi,0		; Have we filled the row yet?
+	jne .pushr		; If not, go push another one
+	push ShowArray		; Push address of base display string
+	call printf		; Display the random numbers
+	add esp,28		; Stack cleanup: 7 items X 4 bytes = 28
+	cmp esi,0		; See if pull count has gone to 0
+	jnz .dorow		; If not, we go back and do another row!
+	ret			; Done, so go home!
+	
+	;; This subroutine pulls random values and stuffs them into an
+	;; integer array.  Not intended to be general purpose.  Note that
+	;; the address of the random number generator entry point must
+	;; be loaded into edi before this is called, or you'll seg fault!
+puller:
+	mov esi,dword [Pulls]	; Put pull count into ESI
+.grab:	dec esi			; Decrement counter in ESI
+	call edi		; Pull the value; it's returned in eax
+	mov [Stash+esi*4],eax   ; Store random value in the array
+	cmp esi,0		; See if we've pulled 4 yet
+	jne .grab		; Do another if ESI <> 0 
+	ret			; Otherwise, go home!
+
+; MAIN PROGRAM:
+					
+global main			; Required so linker can find entry point
+	
+main:
+        push ebp		; Set up stack frame for debugger
+	mov ebp,esp
+	push ebx		; Program must preserve EBP, EBX, ESI, & EDI
+	push esi
+	push edi
+;;; Everything before this is boilerplate; use it for all ordinary apps!	
+
+; Begin by seeding the random number generator with a time_t value:	
+Seedit:	push 0		; Push a 32-bit null pointer to stack
+	call time	; Returns time_t value (32-bit integer) in EAX
+	add esp,4	; Stack cleanup for one parm
+	push eax	; Push time_t value in EAX onto stack
+	call srand	; Time_t value is the seed value for random # gen
+	add esp,4	; Stack cleanup for one parm
+
+; All of the following code blocks are identical except for the size of
+; the random value being generated:
+	
+; Create and display an array of 31-bit random values
+	mov edi,pull31	; Copy address of random # subroutine into EDI
+	call puller	; Pull as many numbers as called for in [pulls]
+	push 32		; Size of numbers being pulled, in bits
+	push dword [Pulls] ; Number of random numbers generated
+	push Display	; Address of base display string
+	call printf	; Display the label
+	add esp,12	; Stack cleanup: 3 parms X 4 bytes = 12
+	call shownums	; Display the rows of random numbers
+	
+; Create and display an array of 16-bit random values
+	mov edi,pull16	; Copy address of random # subroutine into edi
+	call puller	; Pull as many numbers as called for in [pulls]
+	push 16		; Size of numbers being pulled, in bits
+	push dword [Pulls] ; Number of random numbers generated
+	push Display	; Address of base display string
+	call printf	; Display the label
+	add esp,12	; Stack cleanup: 3 parms X 4 bytes = 12
+	call shownums	; Display the rows of random numbers
+	
+; Create and display an array of 8-bit random values:
+	mov edi,pull8	; Copy address of random # subroutine into edi
+	call puller	; Pull as many numbers as called for in [pulls]
+	push 8		; Size of numbers being pulled, in bits
+	push dword [Pulls] ; Number of random numbers generated
+	push Display	; Address of base display string
+	call printf	; Display the label
+	add esp,12	; Stack cleanup: 3 parms X 4 bytes = 12
+	call shownums	; Display the rows of random numbers
+
+; Create and display an array of 7-bit random values:
+	mov edi,pull7	; Copy address of random # subroutine into edi
+	call puller	; Pull as many numbers as called for in [pulls]				
+	push 7		; Size of numbers being pulled, in bits
+	push dword [Pulls] ; Number of random numbers generated
+	push Display	; Address of base display string
+	call printf	; Display the label
+	add esp,12	; Stack cleanup: 3 parms X 4 bytes = 12
+	call shownums	; Display the rows of random numbers
+
+; Create and display an array of 4-bit random values:
+	mov edi,pull4	; Copy addr. of random # subroutine into EDI
+	call puller	; Pull as many #s as called for in [pulls]
+	push 4		; Size of numbers being pulled, in bits
+	push dword [Pulls] ; Number of random numbers generated
+	push Display	; Address of base display string
+	call printf	; Display the label
+	add esp,12	; Stack cleanup: 3 parms X 4 bytes = 12
+	call shownums	; Display the rows of random numbers
+
+; Clear a buffer to nulls:
+Bufclr:	mov ecx, BUFSIZE+5  ; Fill whole buffer plus 5 for safety
+.loop:	dec ecx		    ; BUFSIZE is 1-based so decrement first!
+	mov byte [RandChar+ecx],0     ; Mov null into the buffer
+	cmp ecx,0	    ; Are we done yet?
+	jnz .loop	    ; If not, go back and stuff another null
+
+; Create a string of random alphanumeric characters:
+Pulchr:	mov ebx, BUFSIZE	; BUFSIZE tells us how many chars to pull
+.loop:	dec ebx			; BUFSIZE is 1-based, so decrement first!
+	mov edi,pull6		; For random in the range 0-63
+	call puller		; Go get a random number from 0-63
+	mov cl,[CharTbl+eax]	; Use random # in eax as offset into table
+	                        ;  and copy character from table into CL
+	mov [RandChar+ebx],cl	; Copy char from CL to character buffer
+	cmp ebx,0		; Are we done having fun yet?
+	jne .loop		; If not, go back and pull another
+
+; Display the string of random characters:
+	mov eax,1	; Output a newline
+	call newline	;  using the newline procedure
+	push RandChar	; Push the address of the char buffer 
+	call puts	; Call puts to display it
+	add esp,4	; Stack cleanup for one parm
+	mov eax,1	; Output a newline
+	call newline	;  using the newline subroutine
+		
+;;; Everything after this is boilerplate; use it for all ordinary apps!
+	pop edi		; Restore saved registers
+	pop esi
+	pop ebx
+	mov esp,ebp	; Destroy stack frame before returning
+	pop ebp
+	ret		; Return control to Linux
+```
+
+
+
+### 10.7.3 有些位比其它位更具随机性
+
+有关 rand() 和 srand() 的 Unix 文档表明，由 rand() 产生的值的低序位总是不如高序位随机性强。如果要获取指定位数的随机数，例如 要获得一个 6 位随机数，可将其右移25位。
+
+若要获得 n 位随机数，就将生成的随机数右移 (32-n-1) 位
+
+
+
+### 12.7.4 调用寄存器中的地址
+
+将过程的地址存入寄存器中，就可以通过寄存器来进行过程调用。例如：下列两次 call 调用等价：
+
+```
+mov ebx,pull8       ; 将 pull8 标签代表的地址加载到 EBX 中
+call pull8          ; 调用由 pull8 所代表的地址
+call ebx            ; 调用存放在 EBX 中的地址
+```
+
+
+
+## 12.8 C 如何看待命令行参数
+
+之前 Linux 程序访问命令行参数是通过 ESP，在 glibc 中连接和调用标准 C 库中的函数时，这一过程将发生显著变化，因为 glibc 的启动代码会把一些其他内容压入栈中。但幸运的是，可以通过 EBP 来访问命令行参数，其原理如下图：
+
+<img src="/Users/wangjun/Library/Application Support/typora-user-images/截屏2021-07-03 下午11.15.22.png" alt="截屏2021-07-03 下午11.15.22" style="zoom: 67%;" />
+
+
+
+可以通过如下代码访问 命令行参数：
+
+```
+	mov edi,[ebp+8]       ; 将参数数量加载到 EDI 中
+	mov ebx,[ebp]         ; 将指向参数表的指针加载到 EBX 中
+	xor esi,esi           ; 将 ESI 清零
+.showit:
+	push dword [ebx+esi*4] ; 将第一个参数的地址压入堆栈
+	push esi               ; 将参数编号压入堆栈
+	push ArgMsg            ; 将显示字符串的地址压入堆栈
+	call printf            ; 显示实参编号和实参
+	add esp,12             ; 堆栈清理：3 个参数*4个字节=12
+	inc esi                ; 跳到下一个参数
+	dec edi                ; 将参数计数器的值减 1
+	jnz .showit            ; 如果参数计数器的值为零，我们的任务完成。
+```
+
+
+
+## 12.9 简单文件输入/输出
+
+最后一个示例，将实现以下功能：
+
+* 创建一个新文件，如果已经存在，则覆盖该文件
+* 提供 2 个参数，第 1 个是数字，第 2 个是一个字符串，数字指出程序将在文件中插入字符串多少行。
+* 如果缺少数字，则程序出错退出。
+* 如果缺少字符串，则写入随机字符。
+
+
+
+### 12.9.1 通过 sscanf() 将字符串转换为数字
+
+strtod() 函数只能将字符串转换为整数，而 sscanf() 几乎能够将任何一个合法数字值的文本表达式转换为一个适当的数字表达形式。
+
+sscanf() 函数需要三个参数，必须按照以下顺序将它们压入堆栈。
+
+1. 数字型变量的地址，保存转换之后的数字。
+2. 格式化代码字符串的地址压入堆栈，它告诉 sscanf()  将输入的文字转换成哪种数字格式。例如：`%d`可以转换为 32 位整数。
+3. 最后，将数字值的文本字符串的地址压入堆栈。
+
+它还返回一个编码到 EAX 中，以指示转换是否成功。如果 EAX 的值是 0，代表发生了一个错误，如果 EAX 的值是 1，则指示转换成功。这是最基本的用法，也可以一次转换多个数字文本。
+
+下列演示转换一个数字文本：
+
+```
+mov ebx,[ebp+12]         ; 将指向参数表的指针放入 ebx 中
+push LineCount           ; 为了调用 sscanf，将代表行数的整数的地址压入堆栈。
+push IntFormat           ; 将整数格式化代码的地址压入堆栈
+push dword [ebx+4]       ; 将arg(1) 的地址压入堆栈
+call sscanf              ; 调用 sscanf 将 arg(1) 转换成一个整数
+add esp,12               ; 堆栈清理
+cmp eax,1                ; 检查返回值，返回值为 1，说明得到了一个有效的数字
+je chkdata               ; 如果我们得到了一个有效的数字，则继续，否则，异常终止
+```
+
+
+
+### 12.9.2 创建和打开文件
+
+使用 fopen() 函数，我们可以创建或者打开文件。在调用它之前，必须把以下参数按以下顺序压入堆栈：
+
+1. 打开模式，经常使用的有："r","w"和 "a"。
+
+   WriteCode db 'w',0
+
+   OpenCode db 'r',0
+
+2. 即将打开的文件的名字的地址。
+
+调用 fopen() 之后，将会返回一个文件句柄到 EAX 中，句柄为 Linux 分配给一个文件的 32 位数字，如果打开失败，EAX 的值将为 0。
+
+以下是打开文件示例：
+
+```
+push opencode    ; 将以只读("r")的方式打开，将字符串的地址压入堆栈
+push ebx         ; 帮助文件的名字的地址存放在 EBX 中，压入堆栈中
+call fopen       ; 尝试以只读的方式打开
+add esp,8        ; 清理堆栈
+cmp eax,0        ; 如果打开操作失败，fopen() 返回一个空值。
+<根据需要进行跳转>
+```
+
+![截屏2021-07-04 上午12.03.07](/Users/wangjun/Library/Application Support/typora-user-images/截屏2021-07-04 上午12.03.07.png)
+
+
+
+### 12.9.3 使用 fgets() 从文件中读取文本
+
+将一个文件以读取当方式打开，就可以使用 fgets() 函数从中顺序读取文字行了。每次调用 fgets(),从文件中读取一行，行被定义为一直到下一个 EOL(“换行”)字符(ASCII 码 10)。
+
+必须向 fgets() 传递一个极限值，当到达比极限值少 1 时，停止读取字符。然后，增加一个 EOL 字符到缓冲区中，将其作为最后的字符并返回。
+
+调用方式：
+
+1. 将从 fopen() 函数返回的文件句柄压入堆栈。
+2. 将该字符的计数极限值压入堆栈。
+3. 将用于存放 fgets() 从文件中读出的字符的字符缓冲区的地址压入堆栈。
+
+所有工作完成，调用 fgets() , 如果 fgets() 返回一个 0 到 EAX 中，那么已经到达了文件末尾，或者可能在读取过程中发生了文件错误。相反，如果 EAX 没有返回 0，那么可以假设在缓冲区的地址处已经出现了有效文本。
+
+```
+diskhelp:
+	push OpenCode         ; 将指向 "以读取方式打开" 的代码 "r" 的指针压入堆栈
+	push ebx              ; 指向帮助文件的名字的指针被传递到 ebx 中
+	call fopen            ; 尝试打开，用于读取操作
+	add esp,8             ; 清理堆栈
+	cmp eax,0             ; 如果尝试打开操作失败，fopen 返回空值
+	jne .disk             ; 从磁盘文件中读取帮助信息
+	call memhelp          ; 如果在磁盘上有帮助文件，从内存中读取
+	ret
+.disk:
+	mov ebx,eax           ; 将打开文件的句柄保存到 ebx 中
+.rdln:
+	push ebx              ; 将文件句柄压入堆栈
+	push dword HELPLEN    ; 限制读取文本行的长度
+	push HelpLine         ; 将帮助文本行缓冲区的地址压入堆栈
+	call fgets            ; 从文件中读取一行
+	add esp,12            ; 清理堆栈
+	cmp eax,0             ; 如果返回空值，表明发生了错误，或到达了文件末尾
+	jle .done             ; 如果 EAX 中的值为0，关闭返回
+	push HelpLine         ; 将帮助行的地址压入堆栈
+	call printf           ; 显示帮助行
+	add esp,4             ; 清理堆栈
+	jmp .rdln
+.done:
+	push ebx              ; 把即将关闭的句柄压入堆栈
+	call fclose           ; 调用 fclose 关闭文件
+	add esp,4             ; 清理堆栈
+	ret                   ; 返回
+```
+
+
+
+### 12.9.4 使用 fprintf() 写文本到文件中
+
+fprintf() 能够做 printf 能做的所有事，它需要一个放在堆栈上的额外参数：已打开文本文件的文件句柄。fprintf() 使用方法：
+
+1. 将变量的地址压入堆栈中。
+2. 将包含格式化代码的基字符串的地址压入堆栈。
+3. 将文本应该写入的目标文件的句柄压入堆栈中。
+
+然后调用 fprintf()，调用后，如果 EAX 值变为负数，则表示遇到错误。
+
+```
+push esi                ; ESI 是指向文本行的指针
+push 1                  ; 将第一行的行号压入堆栈
+push WriteBase          ; 将基字符串的地址压入堆栈
+push ebx                ; 将打开文件的文件句柄压入堆栈
+writeline:
+	cmp dword edi,0       ; 行计数器已经变为零了吗
+	je donewrite          ; 退出并清理堆栈
+	call fprintf          ; 将文本行写入文件
+	dec edi               ; 递减即将被写入的行的计数值
+	add dword [esp+8],1   ; 更新堆栈上的行号
+	jmp writeline         ; 继续下一轮循环
+donewrite:
+	add esp,16            ; 完成 fprintf ，清理堆栈
+```
+
+
+
+### 12.9.5 关于收集过程到库中的注解
+
+下面是一个关于如何收集过程到库中的概述：
+
+* 不是必须得进入入口点定义或者寄存器保存。只需要创建一个新的源代码文件，并将过程的源代码复制到该文件中，然后确保该文件必须以 .asm 为扩展名即可。
+* 将在库中定义的所有过程的可调用入口点，以及任何可能被其他过程和库使用的标识符定义为 global。
+* 如果过程需要调用任何 C 函数或者任何位于你拥有或者创建的其他库中的过程，或者使用在库外定义的变量或其他标识符，将所有的这类外部标识符声明为 extern。
+* 当从程序中调用库中的过程时，更新该程序的生成文件，以便最终的可执行文件拥有一个对于该库的依赖条件。
+
+
+
+## 结论：不是结束，而是刚刚开始
+
+旅程才是目标。问题不在于征服，而是与它一起成长，不断发展这方面的相关知识。
+
+一般学习方法：
+
+* 学习 Linux 
+* 学习汇编语言
+* 编写代码
+* 编写更多代码
+
+关于 Linux 方面的书：
+
+Ununtu 8.10 Linux Bible 作者 William von Hagen(Wiley, 2009)
+
+Beginning Linux Programming 第四版 作者：Neil Matthew 和 Richard Stones(Wrox Press, 2008)
+
+关于 汇编语言
+
+The Art of Assembly Language 作者: Randall Hyde (No Starch Press , 2003)
+
+这可能是写的最好的汇编语言书籍。
+
+Professional Assembly Language 作者：Richard Blum(Wrox Press,2005)
+
+不错的中级书，单是关于数字编程方面的第 3 章就非常值得买一本。
+
+
+
+计算的复杂性似乎每两年就增加一倍。不过不要怕，一定要坚持告诉自己：我能做到的！相信此话的真理，便是离开起点的本质——而其余的路，像所有的路一样，要踏踏实实地，一步一个脚印地走下去。
+

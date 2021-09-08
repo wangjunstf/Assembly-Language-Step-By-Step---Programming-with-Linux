@@ -1,0 +1,1023 @@
+# 第 11 章 字符串奏鸣曲 神奇的字符串指令
+
+一些字符串指令有权以一种非常紧凑的方式处理大量的字节序列：像执行单条指令一样执行一个完整的循环指令，而且完全在 CPU 之内完成。
+
+
+
+## 11.1 汇编语言中字符串的概念
+
+字符串是在内存中的任意一组连续的字节，可以为操作系统允许的任意大小。汇编语言中的字符串的主要概念界定是：它的成员字节刚好排成一排，没有中断。
+
+
+
+### 11.1.1 彻底颠覆你的 “字符串感觉”
+
+当你将一个寄存器设置为指向一个字符串时，你就拥有了一个字符串。而一旦你指向了一个字符串，该字符串的长度将由存放在寄存器 ECX 中的值决定。在 CPU 的芯片上，硬编码了一组关于字符串和寄存器的假设。**当执行一条字符串指令，CPU 将使用这些假设来确定读取或写入哪些内存区域。**
+
+
+
+### 11.1.2 源字符串和目标字符串
+
+源字符串和目标字符串也可以重叠。
+
+以下是 32 位保护模式下执行字符串指令时，CPU 对字符串所做的假设：
+
+* ESI 寄存器指向源字符串。
+* EDI 寄存器指向目标字符串。
+* 这两种字符串的长度都等于存放在 ECX 寄存器中的值。至于这个长度如何对 CPU 起作用，取决于具体的指令及该指令的使用方法。
+* 来自一个源字符串或者去往一个目标字符串的数据必须要么从寄存器 EAX 开始旅行，要么在寄存器 EAX 中结束旅行，要么通过寄存器 EAX
+
+当同时使用源字符串和目标字符串时，它们的长度必须相等。
+
+
+
+### 11.1.3 虚拟文本显示屏幕
+
+在 Linux 下已经不能直接操作硬件，要操作硬件，必须通过操作系统。使用汇编语言为 Linux 控制台编写文本模式的应用程序已经根本不可能再像 DOS 下那么容易了。
+
+不过我们可以通过一些技巧，其中之一就是在内存中创建我们自己的文件视频刷新缓冲区，并将其作为一个已命名变量，定期通过 INT 80H 指令写到 Linux 控制台上。本质上，就是显示一个很长的字符串。
+
+```asm
+;  Executable name : VIDBUFF1
+;  Version         : 1.0
+;  Created date    : 5/11/2009
+;  Last update     : 5/13/2009
+;  Author          : Jeff Duntemann
+;  Description     : A simple program in assembly for Linux, using NASM 2.05,
+;    demonstrating string instruction operation by "faking" full-screen
+;    memory-mapped text I/O.
+;
+;    Note that the output to the console from this program will NOT display
+;    correctly unless you have enabled the IBM850 character encoding in
+;    the terminal program being used to display the console! For more on
+;    this issue, and how to enable IBM850, see p. 177 in the book.
+;
+;  Build using these commands:
+;    nasm -f elf -g -F stabs vidbuff1.asm
+;    ld -o vidbuff1 vidbuff1.o
+;
+
+SECTION .data			; Section containing initialised data
+	EOL 	equ 10		; Linux end-of-line character
+	FILLCHR	equ 32		; ASCII space character
+	HBARCHR	equ 196		; Use dash char if this won't display
+	STRTROW	equ 2		; Row where the graph begins
+
+; The dataset is just a table of byte-length numbers:
+	Dataset	db 9,17,71,52,55,18,29,36,18,68,77,63,58,44,0
+
+	Message db "Data current as of 5/13/2009"
+	MSGLEN  equ $-Message
+
+; This escape sequence will clear the console terminal and place the
+; text cursor to the origin (1,1) on virtually all Linux consoles:
+	ClrHome db 27,"[2J",27,"[01;01H"
+	CLRLEN	equ $-ClrHome	; Length of term clear string
+	
+SECTION .bss			; Section containing uninitialized data	
+
+	COLS	equ 81		; Line length + 1 char for EOL
+	ROWS	equ 25		; Number of lines in display
+	VidBuff	resb COLS*ROWS	; Buffer size adapts to ROWS & COLS
+
+SECTION .text			; Section containing code
+
+global 	_start			; Linker needs this to find the entry point!
+
+; This macro clears the Linux console terminal and sets the cursor position
+; to 1,1, using a single predefined escape sequence.
+%macro	ClearTerminal 0
+	pushad			; Save all registers
+	mov eax,4		; Specify sys_write call
+	mov ebx,1		; Specify File Descriptor 1: Standard Output
+	mov ecx,ClrHome		; Pass offset of the error message
+	mov edx,CLRLEN		; Pass the length of the message
+	int 80H			; Make kernel call
+	popad			; Restore all registers
+%endmacro
+
+;-------------------------------------------------------------------------
+; Show: 	Display a text buffer to the Linux console
+; UPDATED: 	5/13/2009
+; IN: 		Nothing
+; RETURNS:	Nothing
+; MODIFIES: 	Nothing
+; CALLS:	Linux sys_write
+; DESCRIPTION:	Sends the buffer VidBuff to the Linux console via sys_write.
+;		The number of bytes sent to the console is calculated by
+;		multiplying the COLS equate by the ROWS equate.
+
+Show:	pushad			; Save all registers
+	mov eax,4		; Specify sys_write call
+	mov ebx,1		; Specify File Descriptor 1: Standard Output
+	mov ecx,VidBuff		; Pass offset of the buffer
+	mov edx,COLS*ROWS	; Pass the length of the buffer
+	int 80H			; Make kernel call
+	popad			; Restore all registers
+	ret			; And go home!
+
+
+;-------------------------------------------------------------------------
+; ClrVid: 	Clears a text buffer to spaces and replaces all EOLs
+; UPDATED: 	5/13/2009
+; IN: 		Nothing
+; RETURNS:	Nothing
+; MODIFIES: 	VidBuff, DF
+; CALLS:	Nothing
+; DESCRIPTION:	Fills the buffer VidBuff with a predefined character
+;		(FILLCHR) and then places an EOL character at the end
+;		of every line, where a line ends every COLS bytes in
+;		VidBuff.
+
+ClrVid:	push eax		; Save caller's registers
+	push ecx
+	push edi
+	cld			; Clear DF; we're counting up-memory
+	mov al,FILLCHR		; Put the buffer filler char in AL
+	mov edi,VidBuff		; Point destination index at buffer
+	mov ecx,COLS*ROWS	; Put count of chars stored into ECX
+	rep stosb		; Blast chars at the buffer
+; Buffer is cleared; now we need to re-insert the EOL char after each line:
+	mov edi,VidBuff		; Point destination at buffer again
+	dec edi			; Start EOL position count at VidBuff char 0
+	mov ecx,ROWS		; Put number of rows in count register
+PtEOL:	add edi,COLS		; Add column count to EDU
+	mov byte [edi],EOL	; Store EOL char at end of row
+	loop PtEOL		; Loop back if still more lines
+	pop edi			; Restore caller's registers
+	pop ecx
+	pop eax
+	ret			; and go home!
+
+
+;-------------------------------------------------------------------------
+; WrtLn: 	Writes a string to a text buffer at a 1-based X,Y position
+; UPDATED: 	5/13/2009
+; IN: 		The address of the string is passed in ESI
+;		The 1-based X position (row #) is passed in EBX
+;		The 1-based Y position (column #) is passed in EAX
+;		The length of the string in chars is passed in ECX
+; RETURNS:	Nothing
+; MODIFIES: 	VidBuff, EDI, DF
+; CALLS:	Nothing
+; DESCRIPTION:	Uses REP MOVSB to copy a string from the address in ESI
+;		to an X,Y location in the text buffer VidBuff.
+
+WrtLn:	push eax	; Save registers we change
+	push ebx
+	push ecx
+	push edi
+	cld		; Clear DF for up-memory write
+	mov edi,VidBuff	; Load destination index with buffer address
+	dec eax		; Adjust Y value down by 1 for address calculation
+	dec ebx		; Adjust X value down by 1 for address calculation
+	mov ah,COLS	; Move screen width to AH
+	mul ah		; Do 8-bit multiply AL*AH to AX
+	add edi,eax	; Add Y offset into vidbuff to EDI
+	add edi,ebx	; Add X offset into vidbuf to EDI
+	rep movsb	; Blast the string into the buffer
+	pop edi		; Restore registers we changed
+	pop ecx
+	pop ebx
+	pop eax
+	ret		; and go home!
+
+
+;-------------------------------------------------------------------------
+; WrtHB: 	Generates a horizontal line bar at X,Y in text buffer
+; UPDATED: 	5/13/2009
+; IN: 		The 1-based X position (row #) is passed in EBX
+;		The 1-based Y position (column #) is passed in EAX
+;		The length of the bar in chars is passed in ECX
+; RETURNS:	Nothing
+; MODIFIES: 	VidBuff, DF
+; CALLS:	Nothing
+; DESCRIPTION:	Writes a horizontal bar to the video buffer VidBuff, 
+;		at the 1-based X,Y values passed in EBX,EAX. The bar is
+;		"made of" the character in the equate HBARCHR. The
+;		default is character 196; if your terminal won't display
+;		that (you need the IBM 850 character set) change the
+;		value in HBARCHR to ASCII dash or something else supported
+;		in your terminal.
+
+WrtHB:	push eax	; Save registers we change
+	push ebx
+	push ecx
+	push edi
+	cld		; Clear DF for up-memory write
+	mov edi,VidBuff	; Put buffer address in destination register
+	dec eax		; Adjust Y value down by 1 for address calculation
+	dec ebx		; Adjust X value down by 1 for address calculation
+	mov ah,COLS	; Move screen width to AH
+	mul ah		; Do 8-bit multiply AL*AH to AX
+	add edi,eax	; Add Y offset into vidbuff to EDI
+	add edi,ebx	; Add X offset into vidbuf to EDI
+	mov al,HBARCHR	; Put the char to use for the bar in AL
+	rep stosb	; Blast the bar char into the buffer
+	pop edi		; Restore registers we changed
+	pop ecx
+	pop ebx
+	pop eax
+	ret		; And go home!
+
+
+;-------------------------------------------------------------------------
+; Ruler: 	Generates a "1234567890"-style ruler at X,Y in text buffer
+; UPDATED: 	5/13/2009
+; IN: 		The 1-based X position (row #) is passed in EBX
+;		The 1-based Y position (column #) is passed in EAX
+;		The length of the ruler in chars is passed in ECX
+; RETURNS:	Nothing
+; MODIFIES: 	VidBuff
+; CALLS:	Nothing
+; DESCRIPTION:	Writes a ruler to the video buffer VidBuff, at the 1-based
+;		X,Y position passed in EBX,EAX. The ruler consists of a
+;		repeating sequence of the digits 1 through 0. The ruler
+;		will wrap to subsequent lines and overwrite whatever EOL
+;		characters fall within its length, if it will noy fit
+;		entirely on the line where it begins. Note that the Show
+;		procedure must be called after Ruler to display the ruler
+;		on the console.
+
+Ruler:  push eax	; Save the registers we change
+	push ebx
+	push ecx
+	push edi
+	mov edi,VidBuff	; Load video address to EDI
+	dec eax		; Adjust Y value down by 1 for address calculation
+	dec ebx		; Adjust X value down by 1 for address calculation
+	mov ah,COLS	; Move screen width to AH
+	mul ah		; Do 8-bit multiply AL*AH to AX
+	add edi,eax	; Add Y offset into vidbuff to EDI
+	add edi,ebx	; Add X offset into vidbuf to EDI
+; EDI now contains the memory address in the buffer where the ruler
+; is to begin. Now we display the ruler, starting at that position:
+        mov al,'1'	; Start ruler with digit '1'
+DoChar: stosb		; Note that there's no REP prefix!
+	add al,'1'	; Bump the character value in AL up by 1
+        aaa		; Adjust AX to make this a BCD addition
+	add al,'0'	; Make sure we have binary 3 in AL's high nybble
+        loop DoChar	; Go back & do another char until ECX goes to 0
+	pop edi		; Restore the registers we changed
+	pop ecx
+	pop ebx
+	pop eax
+	ret		; And go home!
+
+;-------------------------------------------------------------------------
+; MAIN PROGRAM:
+	
+_start:
+	nop		; This no-op keeps gdb happy...
+
+; Get the console and text display text buffer ready to go:
+	ClearTerminal	; Send terminal clear string to console
+	call ClrVid	; Init/clear the video buffer
+
+; Next we display the top ruler:
+	mov eax,1	; Load Y position to AL
+	mov ebx,1	; Load X position to BL
+	mov ecx,COLS-1	; Load ruler length to ECX
+	call Ruler	; Write the ruler to the buffer
+
+; Here we loop through the dataset and graph the data:
+	mov esi,Dataset	; Put the address of the dataset in ESI
+	mov ebx,1	; Start all bars at left margin (X=1)
+	mov ebp,0	; Dataset element index starts at 0
+.blast:	mov eax,ebp	; Add dataset number to element index
+	add eax,STRTROW	; Bias row value by row # of first bar
+	mov cl,byte [esi+ebp]	; Put dataset value in low byte of ECX
+	cmp ecx,0	; See if we pulled a 0 from the dataset
+	je .rule2	; If we pulled a 0 from the dataset, we're done
+	call WrtHB	; Graph the data as a horizontal bar
+	inc ebp		; Increment the dataset element index
+	jmp .blast	; Go back and do another bar
+
+; Display the bottom ruler:
+.rule2:	mov eax,ebp	; Use the dataset counter to set the ruler row
+	add eax,STRTROW	; Bias down by the row # of the first bar
+	mov ebx,1	; Load X position to BL
+	mov ecx,COLS-1	; Load ruler length to ECX
+	call Ruler	; Write the ruler to the buffer
+
+; Thow up an informative message centered on the last line
+	mov esi,Message	; Load the address of the message to ESI
+	mov ecx,MSGLEN	; and its length to ECX
+	mov ebx,COLS	; and the screen width to EBX
+	sub ebx,ecx	; Calc diff of message length and screen width
+	shr ebx,1	; Divide difference by 2 for X value
+	mov eax,24	; Set message row to Line 24
+	call WrtLn	; Display the centered message
+
+; Having written all that to the buffer, send the buffer to the console:
+	call Show	; Refresh the buffer to the console
+
+Exit:	mov eax,1	; Code for Exit Syscall
+	mov ebx,0	; Return a code of zero	
+	int 80H		; Make kernel call
+```
+
+
+
+## 11.2 REP STOSB 软件机枪
+
+虚拟文本显示缓冲区只是一块位于 .bss 段中的，通过使用 RESB 指令预留的内存区域。缓冲区的大小由两个等值来定义，这两个等值指定想要的行数和列数。
+
+
+
+### 11.2.1 机枪扫射虚拟显示器
+
+为了将某个字符串(EDI) 的所有值初始化为空格，可以这么做：
+
+目的字符串放入:EDI 寄存器，将字节数放入 ECX 寄存器中，将空格值放入 AL 中，然后通过如下方式编码实现紧密循环：
+
+```asm
+Clear:
+	mov byte [edi],AL       ; 将 AL 中的值写入内存
+	inc edi                 ; 将 EDI 指向缓冲区中的下一个字节
+	dec ecx                 ; 将 ECX 递减一个位置
+	jnz Clear               ; 再次循环直到 ECX 中的值变为零
+```
+
+上面的代码与以下汇编字符串指令等价，它们完成同样的事情。
+
+```asm
+rep stosb
+```
+
+* rep 叫做前缀，它改变了 CPU 处理它后面的指令助记符的方式：递减 ecx 以及跳转。如果没有 rep 就得手动完成这些指令。
+
+* stosb，这个助记符的意思是按字节存储字符串，它仅适用于目标字符串，它的功能需要以下寄存器的参与：
+
+  * 目标字符串加载到 EDI 中(可以这样认为：EDI 和 D 既为目标(destination)的第一额字符，I即为索引(index)的第一个字母)。
+
+  * 需要存取 AL 值的次数存入 ECX 中。
+
+  * 将需要存入字符串的字符放入 AL 中。
+
+
+
+### 11.2.2 执行 STOSB 指令
+
+ 设置了那 3 个寄存器，就可以安全地执行 STOSB 指令了。当这样做时，将发生以下事情：
+
+1. AL 中的字符值被复制到存放在 EDI 中的内存地址中。
+2. EDI 被递增 1，这样，它现在指向内存中刚刚写入的字节的下一个字节。
+
+但是，它没有自动执行指定的次数，换句话说，它并没有递减 ECX 和跳转。只有把 rep 前缀放在 STOSB 的前面，ECX才会自动递减。
+
+如果没有 rep，我们必须显式通过 DEC 指令 或者通过 LOOP 指令。这样也是有好处的，可以更改 AL 的值，以使在一个循环中写入不同的值。
+
+REP 所做的事非常简洁：**它建立一个所有紧密循环中最紧密的循环，而且完全在 CPU 内部，并且重复地将 AL 中的副本发送到内存，每次将 EDI 递增 1，同时将 ECX 递减 1，直到 ECX 递减为 0。然后它就停止。**当善后工作处理完毕，我们会看到整个目标字符串已经添满了 AL 的副本，无论它有多大。
+
+REP STOSB 的使用方法如下：
+
+```
+cld                 ; 清零 DF，从内存地址递增的方向开始循环
+mov al,FILLCHR      ; 将缓冲区过滤器字符放入 AL 中
+mov edi,VidBuff     ; 指向缓冲区中的目标索引
+mov ecx,COLS*ROWS   ; 将存储的字符的数量放到 ECX 中
+rep stosb           ; 在缓冲区中 “爆炸” 字符
+```
+
+FILLCHR 默认被设置为 32，代编空格字符。
+
+
+
+### 11.2.3 STOSB 和方向标志(DF)
+
+DF 被清除(为 0)：edi 往内存地址递增的方向变化，即越来越大
+
+DF 被设置(为 1)：edi 往内存地址递减的方向变化，即越来越小
+
+
+
+### 11.2.4 在显示缓冲区中定义行
+
+由于虚拟显示器的宽度小于实际显示器的宽度，我们可以在希望虚拟显示器的每行结束的位置放入 EOL 字符(行结束符)。例如 ，由以下的每一行就组成一个虚拟显示器：
+
+1 2 3 4 5 6 7 EOL
+
+1 2 3 4 5 6 7 EOL
+
+1 2 3 4 5 6 7 EOL
+
+该虚拟显示器，本质上就是以下字符串，每一个字符都是一个 ASCII 码(空格不算)：
+
+1 2 3 4 5 6 7 EOL 1 2 3 4 5 6 7 EOL 1 2 3 4 5 6 7 EOL
+
+
+
+### 11.2.5 将缓冲区发送到Linux 控制台
+
+通过 INT 80H 对内核服务 sys_write 进行单次调用，将字符串1 2 3 4 5 6 7 EOL 1 2 3 4 5 6 7 EOL 1 2 3 4 5 6 7 EOL发送到控制台，就完成了一个虚拟显示器的现实。
+
+
+
+## 11.3 半自动武器：不带 REP 的 STOSB
+
+不带 REP 的好处：可以存储不同值到目标字符串中。
+
+缺点：我们会在自己处理 CPU 外面的循环上浪费一点时间，因为必须花费一些时间从内存中获取循环指令字节。不过，**如果能让循环尽可能紧密，速度不会降低到令人反感的程度。**特别是在现代处理器上，我们可以非常有效地利用缓存，因而不必每次执行时都从内存中取值。
+
+
+
+### 11.3.1 是谁递减了 ECX 
+
+当使用REP STOSB(或任何带有 REP 前缀的字符串指令)时，在每个内存访问指令发生时，ECX 都被自动减 1.而且一旦 ECX 将自身递减到 0，REP STOSB 将检测到 ECX 的当前值为 0，进而会停止对内存的射击。
+
+如果拿走了 REP ，ECX 将停止自动递减。因而对于 “ECX” 中的计数值是否已经减到 0 的自动检测也会停止。所以，没有 REP，就必须手动递减 ECX，例如`DEC ECX`，然后使用 JNZ(不为零跳转)指令。
+
+
+
+### 11.3.2 LOOP 指令
+
+观察以下代码：
+
+```asm
+DoChar:
+	stosb                ; 此时没有 REP 前缀
+	add al,'1'           ; 将 AL 中的字符加 1
+	aaa                  ; 调整 AX 使之成为 BCD 加法
+	
+	dec ecx              ; 将计数器递减 1
+	jnz DoChar           ; 如果 ECX > 0,继续循环
+```
+
+这个循环等价于以下代码：
+
+```asm
+DoChar: 
+	stosb                ; 此时没有 REP 前缀
+	add al,'1'           ; 将 AL 中的字符的值加 1
+	aaa                  ; 调整 AX 使其成为一个 BCD 加法
+	add al,'0'           ; 确保我们已经把二进制 3 放入到 AL 的高半字节
+	loop DoChar          ; 回去继续处理另一个字符，直到 ECX 变为 0
+```
+
+
+
+Loop 指令首先将 ECX 递减 1，然后它检查零标志，看看该递减操作是否迫使 ECX 变为零。
+
+
+
+### 11.3.3 在屏幕上显示一个标尺
+
+Ruler 过程在屏幕上某一可选位置上显示一个从 1 开始递增的，数字的，可以为任意长度的重复序列。换句话说，你可以在任意你想要的地方显示这样一个数字字符串：
+
+12345678901234567890123456789012345678901234567890
+
+一个典型的对 Ruler 过程的调用看起来这样：
+
+```asm
+mov eax,1           ; 加载 Y 的位置到 AL 中
+mov ebx,1           ; 加载 X 的位置到 BL 中
+mov ecx,COLS-1      ; 加载标尺的长度到 ECX 中
+call Ruler          ; 将标尺写入缓冲区中
+```
+
+为什么长度要小一个字符，因为每一行的末尾都必须有一个 EOL 字符。
+
+
+
+### 11.3.4 MUL 并非 IMUL
+
+用来确定任一给定的X Y 值在缓冲区中的，以字节为单位的偏移地址的算法看起来是这样的：
+
+```asm
+Offset = ((Y * 以字节为单位的显示器的一行的宽度) + X)
+```
+
+
+
+显然，我们必须在屏幕缓冲区中向下移动 Y 行，然后在从屏幕的左边距处向右移动 X 个字节才能到达(X,Y)位置。在 Rular 过程中，计算过程如下：
+
+```asm
+mov edi,VidBuff   ; 加载视频地址到 EDI 中
+dec eax           ; 将 Y 值往下调整 1，用于做地址计算
+dec ebx           ; 将 X 值往下调整 1，用于做地址计算
+mov ah,COLS       ; 将屏幕的宽度放入 AH 中
+mul ah            ; 执行 8 位 乘法：AL * AH，并将结果存回 AX 寄存器中
+add edi,eax       ; 将 Y 在 VidBuff 中的偏移地址放入 EDI 中
+add edi,ebx       ; 将 X 在 VidBuff 中的偏移地址放入 EDI 中 
+```
+
+
+
+MUL 不能替换为 IMUL，因为IMUL 是有符号乘法指令，当操作数是 128 时，MUL 认为是 128，而 IMUL 则认为 128 是 -1。因为对于有符号数老说，最高一位为符号位。
+
+
+
+### 11.3.5 添加 ASCII 数字
+
+指令 MOV AL,'1' 中，这个 '1' 并不是阿拉伯数字 1，而是 ASCII 码 31H，在显示数元 '1' 后，我们需要显示数元 '2'，并且为了做到这一点，我们需要将存储在 AL 中的值从 '1' 改为 '2'。通常情况下，我们不是简单地将 '1' 和 ‘1’ 相加来得到‘2’。31H + 31H 会得到 62H，这是小写字母 b，而不是 ’2‘。在这种情况下，我们可以使用一个名为 AAA 的，有点特殊的指令，在 BCD 码加法后对 AL 进行调整。
+
+AAA 指令是 BCD 指令族中的一员，之所以叫这个名字是因为它们支持 二-十进制编码运算。BCD 码只是另外一种表达一个数值的方法，有点介于纯粹的二进制值(如 1 ) 和 ASCII (如 '1')码数字之间。
+
+BCD 码值是一个占用一个字节的低半字节的 4 位值。它只能表达介于 0 和 9 之间的值。
+
+<img src="/Users/wangjun/Library/Application Support/typora-user-images/截屏2021-06-28 下午4.56.27.png" alt="截屏2021-06-28 下午4.56.27" style="zoom:67%;" />
+
+
+
+如果有一种方法可在 X86 处理器上执行 BCD 加法，将'1' 和 '1' 相加确实会带给我们 '2' ，因为 '1' 和 '2' 都可被作为合法的 BCD 码值来操作。
+
+AAA 注意到 ADD 指令的结果，并迫使它们按照 BCD 码算术出现。从根本上来讲，AAA 能够做到以下两件事情：
+
+* 如果 AL 中低半字节的值大于9，它将其强制转换为 0 到 9 之间的值。这是通过将 AL 与 6 相加，然后迫使高半字节变为 0 来实现的。显然，如果 AL 的低半字节包含一个有效的 BCD 码数字，那么这低半字节的数字不需要任何处理。
+* 如果 AL 中的值必须调整，则表明有一个加法进位，因此 AH 地址1。此外，进位标志 CF 被设置为 1，辅助进位标志 AF 也被设置。同样地，如果当 AAA 指令被执行时，AL 的低半字节包含一个有效的 BCD 码，那么 AH 不被递增，这两个标志位都被清零(强制为 0)，而不是被置为 1。
+
+因此，AAA 可使对 AL 低半字节进行，基于 10(decimal)的加法更为便利。当 AL 被 AAA 指令调整后，低半字节包含一个有效低 BCD 码，而高半字节则包含0。(但是，只有当 AAA 前面的加法是在两个有效的 BCD 码操作数上执行，这才为真)。基于此，我们可以使用 ADD 指令来将诸如 1 和 2 之类的 ASCII 数元相加。Rular 过程在 STOSW 指令之后立即做了这两件事:
+
+```
+add al,'1'      ; 将 AL 中的字符数值增大1
+aaa               ; 调整 AX 使之 成为一个 BCD 码加法
+```
+
+如果在加法之前，AL 的低半字节的内容为9，将其与 1 相加将会产生一个 0AH值，这不是合法的 BCD 码值。AAA 将会通过将其与 6 相加并清除高半字节的内容来调整 AL 的值。将 0A 与 6 相加将会产生结果 10，所以一旦高半字节被清零，AL 中的新值将是0，另外，AH 将被递增 1。
+
+
+
+### 11.3.6 调整 AAA
+
+将 ‘1’ 和 ‘1’ 相加不完全等同于可显示数字 '2'，相反，AL 变成了二进制 2。为了使 AL 中的内容再次成为一个可显示的 ASCII 数字，我们需要将 AL 中的值与 30H 相加，即与 '0' 相加，这样 AX 的值变为32H，即'2'。
+
+当执行多列 BCD 码数学运算时，你必须考虑进位，这涉及小心使用辅助进位标志 AF。还有 AAD，AAM，AAS指令分别用于在 BCD 码除法，BCD码乘法，BCD码减法后调整 AL 的值。同样的一般思想依然适用：**所有的 BCD 码调整指令都强制标准的二进制算术指令同意支持有效的 BCD 码操作数。**
+
+
+
+### 11.3.7 Ruler 过程的教训 
+
+Rular 过程是一个关于 LOOP 指令如何与 STOSB 共同工作以实现向下调整 ECX 和 控制返回到循环顶部的很好示例。从某种意义上来讲，LOOP 指令在 CPU 之外完成 REP 在 CPU 之内所做的事情：调整 ECX 的值和关闭循。在使用任何字符串指令时，尽量把它的工作原理搞清楚。
+
+
+
+### 11.3.8 STOS 指令的 16 位版本和 32 位版本
+
+STOS 字符串指令有三种尺寸：字节，字和双字。分别是：STOSB，STOSW，STOSD。它们分别将特定大小的寄存器的值 存储到内存中。
+
+它们的工作方式几乎相同，主要的不同之处是对 EDI 的修改方式，对于STOSB，改变 1 个字节，对于 STOSW ，改变 2 个字节，对于 STOSD 改变 4 个字节。
+
+
+
+## 11.4 MOVSB：快速块拷贝
+
+MOVS 也有三种尺寸：处理字节(MOVSB)，处理 16 位字(MOVSW)和处理 32 位双字(MOVSD)。
+
+MOVSB 指令的特点：一块存放在 ESI 指定的内存地址中的内存数据被复制到存放在 EDI 寄存器中的内存地址，即将移动的字节数存放在 ECX 寄存器中。每当一个字节被复制之后，ECX 中的计数值递减 1，而且将 ESI 和 EDI 中的地址调整 1。对于MOVSB，ESI/EDI调整 1，对于MOVSW，ESI/EDI调整 2，对于MOVSD，ESI/EDI调整 4。具体调整方向，是增大还是减小，取决于 DF 的状态。DF 为0时，地址往增大方向调整，DF 为 1，地址往减小方向调整。
+
+下列过程，演示了 MOVSB 的工作过程: 它将 一个字符串 复制到显示缓冲区 VidBuff 的某一给定的 (X,Y) 位置
+
+```asm
+cld               ; 清除 DF，以便进行上内存写入工作
+mov edi,VidBuff   ; 将缓冲区地址作为目标索引加载到 EDI 寄存器
+dec eax           ; 将 Y 的值下调 1，用于地址计算
+dec ebx           ; 将 X 的值下调 1，用于地址计算
+mov ah,COLS       ; 将显示器的宽度放入 AH 中
+add edi,eax       ; 将 Y 在 VidBuff 中的偏移地址放入 EDI 中
+add edi,ebx       ; 将 X 在 VidBuff 中的偏移地址放入 EDI 中 
+rep movsb         ; 将这个字符串 "爆炸" 到缓冲区中
+```
+
+在 vidbuff1 的主程序部分，需要执行一些额外的计算，以实现在任一可显示的中央而不是在某一特定的(X,Y)位置显示一个字符串：
+
+```asm
+mov esi,Message     ; 将消息的地址加载到寄存器 ESI 中
+mov ecx,MSGLEN      ; 将消息的长度加载到 ECX 寄存器中
+mov ebx,COLS        ; 将屏幕的宽度加载到 EBX 寄存器中
+sub ebx,ecx.        ; 计算消息的长度和屏幕的宽度之间的差值
+shr ebx,1           ; 将该差值除以1，以求得 X 的值
+mov eax,24          ; 将消息的行设置为第 24 行
+call WrtLn
+```
+
+
+
+### 11.4.1 DF 和重叠块移动
+
+没有人规定 ESI 和 EDI 必须指向完全独立的内存区域。源内存块和目标内存块可能会重叠。将我们想把某个字符串往后移动 1 个字符，使用 rep movsb。
+
+```asm
+Section .data
+	EditBuff: db 'abcdefghijklm '
+	ENDPOS equ 12
+	INSRTPOS equ 5
+
+section .text
+	global _start
+_start_:
+	nop
+; 将你的实验放到两个nop 指令之间
+	std               ; 向内存地址减小的放下改变 EDI 和 EDX
+	mov ebx,EditBuff+INSERTPOS
+  mov esi,EditBuff+ENDPOS
+  mov edi,EditBuff+ENDPOS+1
+  mov ecx,ENDPOS-INSERTPOS+1
+  rep movsb
+  mov byte [ebx],' '
+
+  nop
+section .bss
+
+```
+
+
+
+## 11.5 将数据存储不连续的字符串中
+
+除了可以在 STOSB 指令执行期间更改存放在 EAX 寄存器中的值外，我们还可以更改目标地址。因此在一个非常紧密的循环内将数据存储到不同的内存区域。
+
+### 11.5.1 显示一个 ASCII 表
+
+程序主要部分：
+
+```asm
+.DoLn: 
+	mov bl,CHRTLEN         	  ; 每行将包含 32 个字符
+.DoChr:
+	stosb                     ; 注意，没有 REP 前缀
+	jcxz ALLDone              ; 当整个序列被打印完毕，退出
+	inc al                    ; 将 AL 中的字符值增大 1
+	dec bl                    ; 将计数器的值减1
+	Loopnz .DoChr             ; 回去并处理另外一个字符直到 BL 变为 0
+	add edi,(COLS-CHRTLEN)    ; 将 EDI 挪到下一行的开始位置
+	jmp .DoLn                 ; 开始显示下一行
+```
+
+
+
+### 11.5.2 嵌套指令循环
+
+一旦所有寄存器都根据 STOSB 所做的假设正确设置之后，showchar 的实际工作由两个指令循环来实现，一个指令循环在另一个指令循环的内部。内层循环显示一个由 32 个字符组成的行。外层循环将显示分解成 7 个这样的行。
+
+```asm
+.DoLn: 
+	mov bl,CHRTLEN         	  ; 每行将包含 32 个字符
+.DoChr:
+	stosb                     ; 注意，没有 REP 前缀
+	jcxz ALLDone              ; 当整个序列被打印完毕，退出
+	inc al                    ; 将 AL 中的字符值增大 1
+	dec bl                    ; 将计数器的值减1
+	Loopnz .DoChr             ; 回去并处理另外一个字符直到 BL 变为 0
+```
+
+如果没有 REP 将循环拉到 CPU 内部，那么我们必须自己设置循环。请记住，每次 STOSB "开火"都发生什么：在 AL 中的字符被写入 EDI 寄存器所指向的内存位置，EDI 递增 1。在循环的另一端，LOOPNZ 指令将 ECX 递减1，并关闭循环。
+
+
+
+### 11.5.3 当 ECX 变为 0 时进行跳转
+
+JCXZ 是另一种 JMP 指令，但是它是一条不观察任何标志，或递减任何寄存器的指令。相反，JCXZ  观察 ECX 寄存器。当看到 ECX 变为零的时候，它跳转到指定的标签处。
+
+大多数 JMP 指令有一些当控制标志不为真时进行跳转的搭档。当进位标志等于 1 时，JC 进行跳转。它的搭档，JNC ，当进位标志不是 1 时进行跳转。但是，JCXZ 是一条喜欢孤独的指令，不存在 JCXNZ 指令。
+
+
+
+### 11.5.4 关闭内层循环
+
+LOOP 观察 ECX 寄存器的状态，直到 ECX 寄存器变为 0 时关闭循环。
+
+LOOPNZ 既观察 ECX 寄存器的状态，也观察零标志寄存器 ZF 的状态，只有当 ECX<>(不等于)0 并且 ZF = 0时，LOOPNZ 才会关闭循环。
+
+
+
+只有显示完每行的 32 字符，即当bl 减为 0 时，跳出 LOOPNZ 循环，继续外层循环。
+
+
+
+### 11.5.5 关闭外层循环
+
+```asm
+.DoLn: 
+	mov bl,CHRTLEN         	  ; 每行将包含 32 个字符
+.DoChr:
+	stosb                     ; 注意，没有 REP 前缀
+	jcxz ALLDone              ; 当整个序列被打印完毕，退出
+	inc al                    ; 将 AL 中的字符值增大 1
+	dec bl                    ; 将计数器的值减1
+	Loopnz .DoChr             ; 回去并处理另外一个字符直到 BL 变为 0
+```
+
+
+
+JCXZ指令，当 ECX 变为 0 时，无论内存循环还是外层循环都执行完了，完整的 ASCII 表已被写入了 VidBuff。
+
+
+
+### 11.5.6 Showchar 小节
+
+使用不带 REP 前缀的 STOSB 指令，当每一个字符被发射到屏幕后，内存循环修改了 AL 中的，这使得每次 STOSB 发射时可以显示一个不同的字符。每当一行字符完成显示后，外层循环修改 EDI 寄存器(目标索引寄存器)的值。这使得我们能够将目标字符串分成 7 个独立的，非连续的行。
+
+
+
+## 11.6 命令行参数和堆栈检查
+
+在 Linux 控制台的命令提示符下启动一个程序时，我们可以选择在可执行程序的路径名之后包含任意合理数量的参数。例如：
+
+```
+$ ./showargs1 time for tacos
+```
+
+堆栈是命令行参数的存储位置。
+
+
+
+### 11.6.1 两块虚拟内存
+
+Linux 操作系统经常使用虚拟内存机制来管理计算机中的物理内存。虚拟内存从某一高度来看，它是这样工作的：Linux 可以拔出计算机物理内存系统中的任意一个区域，然后说，“你应该认为这块内存的第一个地址是 08048000H，并应据此对所有的内存进行相应的处理。”
+
+这是一个谎言，但却是一个有益的谎言。程序可以自由使用 Linux 分配给它的内存块，并假定它是唯一使用该内存块的程序。其他程序可能会被赋予自己的“虚拟”内存块，并且可以与你的程序同时运行，而且它们之间都互不干涉。
+
+这是真正奇怪的部分：每个获得内存块的程序都可能被告知，它的内存块地址从 08048000H 开始。即使对于同时的程序而言，也是这样。每个程序都认为，它运行在自己的小宇宙中，并且每个程序都自以为其内存地址开始于同一个地方。
+
+远在后台，Linux 内核接受任意程序代码发出的每一个单独的内存寻址尝试，并将那个虚拟地址转换成 RAM 中的某处物理内存的地址。这涉及很多与物理内存表相关的工作，甚至(必要时)在硬盘驱动器上的存储位置"伪造" RAM 中的物理内存。但是底线是，程序将得到它自己的内存小宇宙，并且可以假定任意它拥有的内存真正为他自己所拥有。而那个内存在物理内存系统中的精确位置对于该程序而言，是不明确的，而且也不重要。
+
+当程序开始运行时，Linux 实施他的虚拟内存魔术，为该程序的代码和数据预留内存区域。对于基于 X86 的 Linux 系统而言，这样的内存块总是始于 08048000H 处。从那里开始，它一路运行，一直到 0BFFFFFFFH(或附近的某个地方)；顶端地址并不总是相同的。现在，那是一个很大的内存：超过 3 GB。如果只安装了 2GB内存的话，Linux 将如何交给每个程序 3GB 的内存来运行？
+
+很简单：在这 3GB 的虚拟地址空间中，并不是每一个虚拟地址都映射到物理地址上。事实上，一个 Linux 程序的虚拟地址被划分为两块，如图 11-3，较低的块始于 08048000H 并且包含程序的代码，以及在 .data 段 和 .bss 段中定义的数据。它只是本身实际需要的那么大，由代码和已定义的数据来决定。
+
+较高的块可被认为几乎正好相反：它从高内存开始，并且一路向低内存运行。这个较高的块的地址并不总是相同的，但不能高于 0BFFFFFFFH。称为堆栈。
+
+
+
+### 11.6.2 Linux 堆栈剖析
+
+堆栈可能比你想象中的要大得多，也复杂得多。当 Linux 加载程序时，在开始执行程序的代码之前，它将大量的信息放到堆栈里。这包括正在运行的可持续文件的完全合法的路径，用户执行程序时输入的任何命令行参数以及 Linux 环境的当前状态，它是以文本配置字符串的集合，定义了 Linux 是如何配置的。
+
+Linux 从高内存向低内存生成堆栈，从堆栈的底部开始，去往下面的内存。
+
+* 存放在 ESP 中的是一个 32 位的数字，用于指出存放在堆栈上的命令行参数的个数。此值始终至少为1。
+* 位于 ESP 上面的内存中下一个 32 位项是调用文本的地址，可执行文件通过它得到运行。该路径可能是完全路径。
+* 该命令行参数的地址列表终止于一个空指针，这是 32 位的二进制 0 的术语。
+* 从空指针上面的内存开始，是一个较长的 32 位地址列表。具体取决于特定的 Linux 系统，但是它可达近 200 个这些地址每一个都指向一个以空(null)为终止字符的字符串，每一个里面都转载着一个属于 Linux 环境的定义
+* 在Linux 环境变量地址列表的末尾处，是另一个 32 位的空指针，它标志着堆栈“目录”的结束。除此之外，你还可以使用之前在堆栈中找到的地址来访问上内存中更远一些位置上的数据项。
+
+
+
+### 11.6.3 为什么堆栈的地址是不可预测的
+
+几年前，分配给一个正在运行的程序的虚拟空间的最高地址总是 0BFFFFFFFH，并且它总是堆栈的底部。从 Linux 内核的 2.6 版本开始，内核随机化了堆栈的界限。每次程序运行时，它的堆栈地址都会有所不同，通常相差数百万字节。此外，在地址列表的末尾和那些地址所指向的实际字符串数据的起始地址之间，还有一个可变数量的未使用的内存“垫料。”
+
+这主要是为了防止 缓冲区溢出攻击，它可以强迫代码进入堆栈，使之作为数据存在，然后恶意软件就能够执行该行代码。这种执行取决于该恶意代码的硬编码内存地址(因为没有加载器来调整代码地址)，但是如果堆栈(几乎)从来没有在同一个地方出现两次，那么这个硬编码地址将不能工作，并且在堆栈上执行恶意代码会十分困难。
+
+这就是 Linux 天生比那些较老的 Windows 版本(包括 XP 和 2000)更安全的诸多原因之一，后者的堆栈地址可以被很容易地猜到。
+
+
+
+## 11.7 使用 SCASB 进行字符串搜索
+
+由于每一个参数都以一个0字节结束，所以挑战很简单：我们需要寻找 0。这可以通过一种非常明显的方式来实现，在一个循环里从内存地址中读取一个字节，然后将计数器值递增以读取下一个字节之前，将该字节与 0 进行比较。好消息是，X86 指令集在一个字符串指令中就可以实现这样一个循环，该指令并不存储数据(如 STOSB)或复制数据(如 MOVSB)，取而代之的是，它能搜索内存以查找某一特定的数值。这条指令就是 SCASB (按字节扫描字符串)。
+
+```asm
+;  Executable name : SHOWARGS1
+;  Version         : 1.0
+;  Created date    : 4/17/2009
+;  Last update     : 5/19/2009
+;  Author          : Jeff Duntemann
+;  Description     : A simple program in assembly for Linux, using NASM 2.05,
+;    demonstrating the way to access command line arguments on the stack.
+;
+;  Build using these commands:
+;    nasm -f elf -g -F stabs showargs1.asm
+;    ld -o showargs1 showargs1.o
+;
+
+SECTION .data			; Section containing initialised data
+
+	ErrMsg db "Terminated with error.",10
+	ERRLEN equ $-ErrMsg
+	
+SECTION .bss			; Section containing uninitialized data	
+
+; This program handles up to MAXARGS command-line arguments. Change the
+; value of MAXARGS if you need to handle more arguments than the default 10.
+; In essence we store pointers to the arguments in a 0-based array, with the
+; first arg pointer at array element 0, the second at array element 1, etc.
+; Ditto the arg lengths. Access the args and their lengths this way:
+; 	Arg strings: 		[ArgPtrs + <index reg>*4]
+;	Arg string lengths:	[ArgLens + <index reg>*4]
+; Note that when the argument lengths are calculated, an EOL char (10h) is
+; stored into each string where the terminating null was originally. This
+; makes it easy to print out an argument using sys_write. This is not
+; essential, and if you prefer to retain the 0-termination in the arguments, 
+; you can comment out those lines as indicated.
+
+	MAXARGS   equ  10	; Maximum # of args we support
+	ArgCount: resd 1	; # of arguments passed to program
+	ArgPtrs:  resd MAXARGS	; Table of pointers to arguments
+	ArgLens:  resd MAXARGS	; Table of argument lengths
+
+SECTION .text			; Section containing code
+
+global 	_start			; Linker needs this to find the entry point!
+	
+_start:
+	nop			; This no-op keeps gdb happy...
+
+; Get the command line argument count off the stack and validate it:
+	pop ecx 		; TOS contains the argument count
+	cmp ecx,MAXARGS		; See if the arg count exceeds MAXARGS
+	ja Error		; If so, exit with an error message
+	mov dword [ArgCount],ecx ; Save arg count in memory variable
+
+; Once we know how many args we have, a loop will pop them into ArgPtrs:
+	xor edx,edx		; Zero a loop counter
+SaveArgs:
+	pop dword [ArgPtrs + edx*4]  ; Pop an arg into the memory table
+	inc edx			; Bump the counter to the next argument
+	cmp edx,ecx		; Is the counter = the argumemt count?
+	jb SaveArgs		; If not, loop back and do another
+
+; With the argument pointers stored in ArgPtrs, we calculate their lengths:
+	xor eax,eax		; Searching for 0, so clear AL to 0
+	xor ebx,ebx		; Pointer table offset starts at 0
+ScanOne:
+	mov ecx,0000ffffh	; Limit search to 65535 bytes max
+	mov edi,dword [ArgPtrs+ebx*4] ; Put address of string to search in EDI
+	mov edx,edi		; Copy starting address into EDX                                                                                                                                                                                                                                                                                                             
+	cld			; Set search direction to up-memory
+	repne scasb		; Search for null (0 char) in string at edi
+; Comment out the following line if you need mull-terminated arguments:
+	mov byte [edi-1],10	; Store an EOL where the null used to be
+	sub edi,edx		; Subtract position of 0 from start address
+	mov dword [ArgLens+ebx*4],edi	; Put length of arg into table
+	inc ebx			; Add 1 to argument counter
+	cmp ebx,[ArgCount]	; See if arg counter exceeds argument count
+	jb ScanOne		; If not, loop back and do another one
+
+; Display all arguments to stdout:
+	xor esi,esi		; Start (for table addressing reasons) at 0
+Showem:
+	mov ecx,[ArgPtrs+esi*4]	; Pass offset of the message
+	mov eax,4		; Specify sys_write call
+	mov ebx,1		; Specify File Descriptor 1: Standard Output
+	mov edx,[ArgLens+esi*4]	; Pass the length of the message
+	int 80H			; Make kernel call
+	inc esi			; Increment the argument counter
+	cmp esi,[ArgCount]	; See if we've displayed all the arguments
+	jb Showem		; If not, loop back and do another
+	jmp Exit		; We're done! Let's pack it in!
+
+Error: 	mov eax,4		; Specify sys_write call
+	mov ebx,1		; Specify File Descriptor 2: Standard Error
+	mov ecx,ErrMsg		; Pass offset of the error message
+	mov edx,ERRLEN		; Pass the length of the message
+	int 80H			; Make kernel call
+
+Exit:	mov eax,1		; Code for Exit Syscall
+	mov ebx,0		; Return a code of zero	
+	int 80H			; Make kernel call
+```
+
+showargs1 程序首先从堆栈中弹出参数数量到 ECX 中，如果不超过 MAXARGS 中的值，那么 ECX 中的计数值就被用于管理一个循环，该循环将参数本身的地址弹出到双字表 ArgPtrs 中。
+
+REPNE SCASB 指令用来查找每个参数结尾的 0 字节。设置 SCASB 与设置 STOSB 大致相同：
+
+* 对于"上内存"搜索，使用 CLD 指令确保方向标志 DF 被清除
+* 将要进行搜索的字符串的第一个字节的地址放入 EDI 中，在这里，它是一个堆栈上的命令行参数的地址。
+* 即将被查找的值放入 AL 中(这里，它是 0)
+* 将最大计数值放入 ECX 中。这样，如果我们查找的字节实际不在那里的话，就可以在内存中搜索过远的范围了。
+
+REPNE SCASB  创建一个紧密循环，在每一轮循环中，[EDI] 处的字节都与 AL 中的值进行比较。如果相等，则循环结束，REPNE SCASB 停止执行。如果不相等，则 EDI 被递增 1，ECX 被递减 1，继续循环，测试另一个位于[EDI] 处的字节。
+
+当 REPNE SCASB 找到 AL 中的字符并结束后，EDI 将指向字符串中那个被搜到的字符后面位置的字符。要想访问找到的字符，必须从 EDI 中减去 1
+
+mov byte [edi-1],10         ; 在 null 曾经存在的位置存储一个 EOL
+
+
+
+### 11.7.1 REPNE v.s. REPE
+
+REPNE ： 查找与 AL 中的值相匹配的字节时
+
+REPE：查找与 AL 中的值不匹配的字节时
+
+
+
+REPNE SCASB 可以由两种原因结束：
+
+1. 找到了与 AL 中的值匹配的字节。
+2. 计数 ECX 已经减少到 0。
+
+有一种侥幸的可能性：即 ECX 刚好递减到零时，[EDI] 中包含与 AL 中的值相匹配的字节。
+
+每次 SCASB “射击”时，它都做一次比较，该比较或者设置零标志 ZF 或者 将其清零。当 REPNE 指令的比较将 ZF 设置为 1 时，该指令将会结束。当 REPE 指令的比较操作将 ZF 设置为 0 时，该指令将会结束。要想确保绝对捕获搜索失败的结果，我们必须在 SCASB 指令结束后立即测试 ZF
+
+对于 REPNE SCASB  使用 JNZ
+
+对于 REPE SCASB 使用 JZ
+
+
+
+### 11.7.2 从堆栈中弹出，还是对堆栈寻址
+
+这有一个问题：是将数据从堆栈中弹出到寄存器或者变量中这种方式好一些？还是通过内存引用来访问存储在堆栈中的数据，将数据本身留在原地好一些呢？
+
+另一方面，从堆栈中弹出数据，它就不在堆栈上了，因为 ESP 已经向上内存的方向移动了数据项大小那么远，当有数据压入堆栈时，最近一次弹出的数据，它在堆栈上的位置就被覆盖了。
+
+在大多数应用中，一个更好的方法是：只要程序一开始运行，就将 ESP 复制到一个 32 位的指针寄存器中，创建一个不变的堆栈指针的副本，完成这件事的一个不错选择是 EBP。BP 最初被设计用来做的事情就是保存堆栈指针，从而使以后 “非破坏性的”堆栈数据寻址不会因为堆栈操作而变得更加困难。
+
+
+
+如果我们将 EBX 寄存器用作一个基于 0 的参数计数器，那么任意给定参数的地址可以这样计数：
+
+```
+[EBP + 4 + EBX*4]
+```
+
+
+
+### 11.7.3 额外的学分
+
+重写 showargs2.asm，让它能够显示出 Linux 环境变量的完整列表，而不是只是显示程序的命令行参数。
+
+```asm
+; 可执行文件        : showargs1
+; 版本              : 1.0
+; 创建日期          : 27/6/2021
+; 最后更新日期      : 27/6/2021
+; 作者              : wangjun
+; 描述              : 一个用汇编语言编写的运行在 Linux 下的简单程序，使用 NASM 2.13.02，
+;                     演示了访问堆栈中的数据，打印 Linux 环境变了的完整列表。
+; 
+; 使用这些命令生成:
+; nasm -f elf -g -F DWARF showargs1
+; ld -m elf_i386 -o showargs1 showargs1.o
+;
+
+SECTION .data       ; 包含已经初始化数据的段
+    ErrMsg db "Terminated with error.",10
+    ERRLEN equ $-ErrMsg
+
+SECTION .bss        ; 包含未初始化数据的段
+
+; 从本质上讲，我们将参数的指针保存到一个基于 0 的数组中，
+; 第一个参数指针是数组的第 0 号元素
+; 第二个参数是数组的第 1 个元素，等等。
+; 访问参数及其长度的方式是这样的:
+;       参数字符串：[ArgPtrs + <index reg>*4]
+;       参数字符串的长度：[ArgLens + <index reg>*4]
+; 注意，当计算出参数长度之后，一个 EOL 字符(10h)被存放到每个字符串中的原本是空终止的地方。这使得通过
+; sys_write 打印一个参数变得非常容易。
+; 这不是必要的，如果喜欢在参数中保留 0 终止的话，你就可以注释掉该行
+; 记住，如果在结尾处没有 EOL 字符，参数就不会正确地显示。
+
+    MAXARGS equ 10           ; 我们最多支持 10 个参数
+    ArgCount: resd 1         ; 传递给程序的参数的个数
+    ArgPtrs: resd MAXARGS    ; 参数指针表
+    ArgLens: resd MAXARGS    ; 参数长度表
+
+SECTION .text                ; 包含代码的段
+
+global _start
+
+_start:
+    nop                      ; 这个空操作让 gdb 非常高兴
+    mov ecx,[esp]            ; 将初始堆栈指针的值保存到 EBP 中
+    lea ebp,[esp+ecx*4+8]    ; 定位到 环境变量1 的地址
+    xor ebx,ebx              ; 堆栈地址偏移从 0 开始
+    xor eax,eax              ; 我们要查找 0，所以将 AL 清零
+Scan:
+    cmp dword [ebp+ebx*4],0000H    ; 判断是否到空指针区域
+    je Showem
+    mov ecx,0000ffffH        ; 将查找限制在最多 65535 个字节之内
+    mov edi,dword [ebp + ebx*4]        ; 将要搜索的字符串地址放入 EDI
+    mov edx,edi                        ; 将起始地址复制到 edx 中
+    cld                                ; 将查找方向，沿着地址增大的方向
+    repne scasb                        ; 在 edi 中的字符串中查找null (0 字符)
+    jnz Error                          ; REPNE SCASB 以没有找到 AL 中的值而结束
+    mov byte [edi-1],10                ; 在 null 曾经存在的地方放入一个 EOL 字符
+    sub edi,edx                        ; 从开始地址减去起始地址，得到字符个数
+    mov dword [ArgLens +ebx*4],edi     ; 将参数的长度加入表中
+    inc ebx                            ; 将参数计数器加 1
+    jmp Scan
+
+
+; 将所有的参数显示到标准输出
+    xor esi,esi              ; 从零开始(出于寻址的原因)
+    mov dword [ArgLens],ebx
+    
+
+Showem:
+    mov ecx,[ebp+esi*4]             ; 传递消息的偏移量
+    mov eax,4                       ; 指定 sys_write 调用
+    mov ebx,1                       ; 指定文件描述符1：标准输出
+    mov edx,[ArgLens + esi*4]       ; 传递消息长度
+    int 80H                         ; 进行内核调用
+    inc esi                         ; 递增参数计数器
+    cmp esi,dword [ArgLens]         ; 判断以下参数计数器是否超过了参数个数
+    jb Showem                       ; 如果没有，回去继续循环，进行另一轮处理
+    jmp Exit                        ; 正常退出
+
+Error:
+    mov eax,4                ; 指定 sys_write 调用
+    mov ebx,1                ; 指定文件描述符2：标准错误
+    mov ecx,ErrMsg           ; 传递错误消息的偏移地址
+    mov edx,ERRLEN           ; 传递错误消息的长度
+    int 80H                  ; 进行内核调用
+
+Exit:
+    mov eax,1                ; 退出系统调用的代码
+    mov ebx,0                ; 返回一个零代码
+    int 80H                  ; 进行内核调用
+```
